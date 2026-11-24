@@ -9,14 +9,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Calendar date helpers for {@code YYYY-MM-DD} values (operators-v1 §8). */
-final class Dates {
+public final class Dates {
 
     private static final Pattern DATE = Pattern.compile("(\\d{4})-(\\d{2})-(\\d{2})");
 
     private Dates() {}
 
     /** Parses a valid date between 0001-01-01 and 9999-12-31, or returns {@code null}. */
-    static LocalDate parse(Object value) {
+    public static LocalDate parse(Object value) {
         if (!(value instanceof String text)) {
             return null;
         }
