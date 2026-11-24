@@ -1,3 +1,6 @@
+import java.net.URI
+import java.security.MessageDigest
+import java.util.Base64
 import org.springframework.boot.gradle.plugin.SpringBootPlugin
 
 plugins {
@@ -38,6 +41,47 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// Downloads the pinned @formkiln/spec tarball from npm and verifies its integrity.
+val specVersion = providers.gradleProperty("formkilnSpecVersion").get()
+val specIntegrity = providers.gradleProperty("formkilnSpecIntegrity").get()
+val specTarball = layout.buildDirectory.file("formkiln-spec/spec-$specVersion.tgz")
+val specDir = layout.buildDirectory.dir("formkiln-spec/$specVersion")
+
+val downloadSpec by tasks.registering {
+    description = "Downloads and verifies @formkiln/spec@$specVersion."
+    inputs.property("version", specVersion)
+    inputs.property("integrity", specIntegrity)
+    outputs.file(specTarball)
+    // Copy into locals so the action does not capture the build script (configuration cache).
+    val version = specVersion
+    val integrity = specIntegrity
+    val target = specTarball
+    doLast {
+        val url = URI("https://registry.npmjs.org/@formkiln/spec/-/spec-$version.tgz").toURL()
+        val bytes = url.openStream().use { it.readAllBytes() }
+        val digest = MessageDigest.getInstance("SHA-512").digest(bytes)
+        val actual = "sha512-" + Base64.getEncoder().encodeToString(digest)
+        check(actual == integrity) { "Integrity mismatch for @formkiln/spec@$version: $actual" }
+        target.get().asFile.apply {
+            parentFile.mkdirs()
+            writeBytes(bytes)
+        }
+    }
+}
+
+val extractSpec by tasks.registering(Sync::class) {
+    description = "Extracts @formkiln/spec@$specVersion for the conformance tests."
+    dependsOn(downloadSpec)
+    from(tarTree(resources.gzip(specTarball))) {
+        eachFile { path = path.removePrefix("package/") }
+        includeEmptyDirs = false
+    }
+    into(specDir)
+}
+
 tasks.withType<Test> {
     useJUnitPlatform()
+    dependsOn(extractSpec)
+    inputs.dir(specDir)
+    systemProperty("formkiln.spec.dir", specDir.get().asFile.absolutePath)
 }
