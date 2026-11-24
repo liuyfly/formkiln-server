@@ -1,0 +1,27 @@
+# All settings can be overridden with environment variables, e.g. FORMKILN_DB_URL.
+# For local development, put them in a git-ignored .env file (see .env.example).
+spring:
+  application:
+    name: formkiln-server
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${FORMKILN_DB_URL:jdbc:postgresql://localhost:5432/formkiln}
+    username: ${FORMKILN_DB_USERNAME:formkiln}
+    password: ${FORMKILN_DB_PASSWORD:formkiln}
+  flyway:
+    locations: classpath:db/migration
+
+server:
+  port: ${FORMKILN_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
