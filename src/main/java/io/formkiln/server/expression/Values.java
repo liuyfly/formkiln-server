@@ -48,7 +48,7 @@ public final class Values {
     }
 
     /** A finite JSON number. */
-    static boolean isNumber(Object value) {
+    public static boolean isNumber(Object value) {
         return value instanceof Double d && Double.isFinite(d);
     }
 
@@ -97,7 +97,7 @@ public final class Values {
     }
 
     /** {@code null}, {@code ""}, {@code []} and {@code {}} are empty (operators-v1 §6). */
-    static boolean isEmpty(Object value) {
+    public static boolean isEmpty(Object value) {
         return value == null
                 || "".equals(value)
                 || (value instanceof List<?> list && list.isEmpty())

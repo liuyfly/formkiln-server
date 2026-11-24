@@ -79,9 +79,17 @@ val extractSpec by tasks.registering(Sync::class) {
     into(specDir)
 }
 
+// -PformkilnSpecDir=../formkiln/packages/spec runs the tests against an unpublished local spec.
+val localSpecDir = providers.gradleProperty("formkilnSpecDir").orNull?.let { file(it) }
+
 tasks.withType<Test> {
     useJUnitPlatform()
-    dependsOn(extractSpec)
-    inputs.dir(specDir)
-    systemProperty("formkiln.spec.dir", specDir.get().asFile.absolutePath)
+    if (localSpecDir != null) {
+        inputs.dir(localSpecDir)
+        systemProperty("formkiln.spec.dir", localSpecDir.absolutePath)
+    } else {
+        dependsOn(extractSpec)
+        inputs.dir(specDir)
+        systemProperty("formkiln.spec.dir", specDir.get().asFile.absolutePath)
+    }
 }

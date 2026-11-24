@@ -46,3 +46,10 @@ npm view @formkiln/spec@<version> dist.integrity
 ```
 
 Update both properties, then run `./gradlew test`.
+
+To test against an unpublished spec (for example while changing the conformance cases), point the build at a local
+checkout of the formkiln repository:
+
+```bash
+./gradlew test -PformkilnSpecDir=../formkiln/packages/spec
+```
