@@ -12,3 +12,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The runtime image must match the Java toolchain version (21). Upgrade both together.
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
