@@ -37,3 +37,12 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/): `feat`, 
 The Java expression and validation engine must pass the conformance cases published in
 [`@formkiln/spec`](https://github.com/liuyfly/formkiln/tree/main/packages/spec/conformance).
 Semantic changes start in that repository.
+
+The build downloads the spec package from npm and verifies it against the sha512 integrity pinned in
+`gradle.properties` (`formkilnSpecVersion`, `formkilnSpecIntegrity`). To move to a new spec release:
+
+```bash
+npm view @formkiln/spec@<version> dist.integrity
+```
+
+Update both properties, then run `./gradlew test`.

@@ -50,6 +50,9 @@ Environment variables always take precedence over `.env`.
 ./gradlew build   # unit and integration tests; Testcontainers starts a throwaway PostgreSQL
 ```
 
+The expression engine is tested against the conformance cases of the pinned
+[`@formkiln/spec`](https://www.npmjs.com/package/@formkiln/spec) release, downloaded and verified during the build.
+
 ### Docker image
 
 ```bash
