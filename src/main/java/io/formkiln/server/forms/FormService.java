@@ -4,6 +4,8 @@ import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
 import io.formkiln.server.notifications.NotificationService;
+import io.formkiln.server.pdf.ReceiptTokens;
+import io.formkiln.server.pdf.SubmissionPdf;
 import io.formkiln.server.platform.CaptchaVerifier;
 import io.formkiln.server.platform.DraftService;
 import io.formkiln.server.platform.EmbedTokens;
@@ -89,7 +91,8 @@ public class FormService {
             String honeypot) {}
 
     /** The result of an accepted submission. */
-    public record AcceptedSubmission(String id, int version, String outcome, Instant submittedAt) {}
+    /** {@code receiptToken} lets the respondent download a receipt for one hour. */
+    public record AcceptedSubmission(String id, int version, String outcome, Instant submittedAt, String receiptToken) {}
 
     /** A submission as returned by the management API. */
     public record SubmissionView(String id, int version, String outcome, Instant submittedAt, String subject,
@@ -110,11 +113,13 @@ public class FormService {
     private final SubmissionData submissionData;
     private final AccountRepository audit;
     private final NotificationService notifications;
+    private final ReceiptTokens receipts;
+    private final SubmissionPdf pdf;
 
     public FormService(FormRepository repository, FormDocumentValidator documentValidator, JsonMapper json, Clock clock,
             PlatformRepository platform, EmbedTokens embedTokens, CaptchaVerifier captcha, DraftService drafts, FileService files,
             WebhookService webhooks, SubmissionData submissionData, AccountRepository audit,
-            NotificationService notifications) {
+            NotificationService notifications, ReceiptTokens receipts, SubmissionPdf pdf) {
         this.repository = repository;
         this.documentValidator = documentValidator;
         this.json = json;
@@ -128,6 +133,8 @@ public class FormService {
         this.submissionData = submissionData;
         this.audit = audit;
         this.notifications = notifications;
+        this.receipts = receipts;
+        this.pdf = pdf;
     }
 
     @SuppressWarnings("unchecked")
@@ -313,7 +320,8 @@ public class FormService {
         if (input.honeypot() != null && !input.honeypot().isBlank()) {
             // Looks accepted to the bot; nothing is stored.
             log.info("Discarded a submission to {} that filled the honeypot", key);
-            return new AcceptedSubmission(UUID.randomUUID().toString(), stored.version(), null, receivedAt);
+            UUID fakeId = UUID.randomUUID();
+            return new AcceptedSubmission(fakeId.toString(), stored.version(), null, receivedAt, receipts.issue(key, fakeId));
         }
         if ("public".equals(access.accessMode()) && captcha.enabled() && !captcha.verify(input.captchaToken(), clientIp)) {
             throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "captchaFailed", "Human verification failed. Please try again.");
@@ -352,7 +360,35 @@ public class FormService {
         notifications.onSubmission(access.formId(), key, definition, saved.id(), saved.submittedAt(), data, input.locale());
 
         drafts.discardQuietly(access.formId(), input.draftToken());
-        return new AcceptedSubmission(saved.id().toString(), saved.version(), saved.outcome(), saved.submittedAt());
+        return new AcceptedSubmission(saved.id().toString(), saved.version(), saved.outcome(), saved.submittedAt(),
+                receipts.issue(key, saved.id()));
+    }
+
+    /** A submission as a PDF for the admin; sensitive values masked unless revealed (audited). */
+    @Transactional
+    public byte[] submissionPdf(String key, UUID id, boolean reveal, String actorType, UUID actorId, String ip) {
+        FormRepository.ListedSubmission listed = repository.findSubmission(key, id)
+                .orElseThrow(() -> new NotFoundException("No such submission"));
+        Map<String, Object> definition = canonical(listed.definitionJson());
+        FieldIndex fields = FieldIndex.of(definition);
+        Map<String, Object> stored = canonical(listed.submission().dataJson());
+        Map<String, Object> data = reveal ? submissionData.decrypt(stored, fields) : submissionData.mask(stored, fields);
+        audit.audit(actorType, actorId, "submission.pdf_exported", key + "/" + id, ip, reveal ? "{\"reveal\": true}" : null);
+        return pdf.render(key, definition, listed.submission(), data, false, null);
+    }
+
+    /** The respondent's receipt, for a valid receipt token; sensitive answers are left out. */
+    @Transactional(readOnly = true)
+    public byte[] receipt(String key, String token, String locale) {
+        UUID id = receipts.verify(token, key)
+                .orElseThrow(() -> new RuntimeException4xx(HttpStatus.UNAUTHORIZED, "receiptExpired",
+                        "This receipt link has expired."));
+        FormRepository.ListedSubmission listed = repository.findSubmission(key, id)
+                .orElseThrow(() -> new NotFoundException("No such submission"));
+        Map<String, Object> definition = canonical(listed.definitionJson());
+        FieldIndex fields = FieldIndex.of(definition);
+        Map<String, Object> data = submissionData.mask(canonical(listed.submission().dataJson()), fields);
+        return pdf.render(key, definition, listed.submission(), data, true, locale);
     }
 
     /**

@@ -67,6 +67,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class FormApi {
 
     private static final int MAX_PAGE = 200;
+    /** Header carrying the receipt token returned with a submission. */
+    public static final String RECEIPT_HEADER = "Formkiln-Receipt";
     /** Header carrying the draft token on draft requests. */
     public static final String DRAFT_HEADER = "Formkiln-Draft";
 
@@ -152,6 +154,25 @@ public class FormApi {
         SubmissionInput input = new SubmissionInput(body.version(), body.answers(), body.locale(), body.draftToken(),
                 body.captchaToken(), body.honeypot());
         return ResponseEntity.status(201).body(forms.submit(key, access, input, request.getRemoteAddr()));
+    }
+
+    private static ResponseEntity<byte[]> pdf(byte[] body, String filename) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(filename).build().toString())
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(body);
+    }
+
+    /** The respondent's receipt as a PDF (receipt token from the submission response, for one hour). */
+    @GetMapping("/v1/forms/{key}/receipt")
+    public ResponseEntity<byte[]> receipt(
+            @PathVariable String key,
+            @RequestHeader(value = RECEIPT_HEADER, required = false) String token,
+            @RequestParam(required = false) String locale) {
+        String language = locale != null && locale.matches("[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*") ? locale : null;
+        return pdf(forms.receipt(key, token, language), key + "-receipt.pdf");
     }
 
     /** Creates a draft; the returned token is the only way to read or update it. */
@@ -284,6 +305,18 @@ public class FormApi {
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(filename).build().toString())
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .body(output -> export.write(prepared, output));
+    }
+
+    /** A submission as a PDF (audited); {@code reveal=true} (editors only) shows sensitive values. */
+    @GetMapping("/v1/manage/forms/{key}/submissions/{id}/pdf")
+    public ResponseEntity<byte[]> submissionPdf(@PathVariable String key, @PathVariable UUID id,
+            @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
+        if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
+            throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
+        }
+        Object[] actor = actor();
+        byte[] body = forms.submissionPdf(key, id, reveal, (String) actor[0], (UUID) actor[1], request.getRemoteAddr());
+        return pdf(body, key + "-" + id.toString().substring(0, 8) + ".pdf");
     }
 
     /** Downloads a file of a submission (audited). */

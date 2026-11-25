@@ -30,6 +30,10 @@ formkiln:
   encryption-key: ${FORMKILN_ENCRYPTION_KEY:}
   # Base URL of the admin app, used in invitation and password reset links.
   admin-url: ${FORMKILN_ADMIN_URL:http://localhost:3200}
+  pdf:
+    # A TrueType font for PDFs (submission exports and receipts), embedded as a subset. Empty uses
+    # Helvetica, which only covers Latin-1: set a font such as Noto Sans SC for other scripts.
+    font: ${FORMKILN_PDF_FONT:}
   # Public URL of the hosted fill-in site, used in "continue later" emails.
   hosted-url: ${FORMKILN_HOSTED_URL:http://localhost:3100}
   mail:
