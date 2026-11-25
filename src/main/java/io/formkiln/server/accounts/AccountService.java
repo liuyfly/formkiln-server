@@ -114,6 +114,7 @@ public class AccountService {
     private final Clock clock;
     private final JsonMapper json;
     private final String adminUrl;
+    private final io.formkiln.server.metrics.FormkilnMetrics metrics;
     private final Argon2PasswordEncoder passwords = Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
     /** Compared against when the email is unknown, so timing does not reveal accounts. */
     private final String dummyHash = passwords.encode(Secrets.newToken());
@@ -124,13 +125,15 @@ public class AccountService {
             Mailer mailer,
             Clock clock,
             JsonMapper json,
-            @Value("${formkiln.admin-url}") String adminUrl) {
+            @Value("${formkiln.admin-url}") String adminUrl,
+            io.formkiln.server.metrics.FormkilnMetrics metrics) {
         this.repository = repository;
         this.secrets = secrets;
         this.mailer = mailer;
         this.clock = clock;
         this.json = json;
         this.adminUrl = adminUrl.replaceAll("/+$", "");
+        this.metrics = metrics;
     }
 
     // ---------------------------------------------------------------- helpers
@@ -175,6 +178,7 @@ public class AccountService {
     }
 
     private void audit(Actor actor, String action, String target, Map<String, Object> details) {
+        metrics.accountAction(action);
         repository.audit(actor.type(), actor.id(), action, target, actor.ip(),
                 details == null || details.isEmpty() ? null : json.writeValueAsString(details));
     }

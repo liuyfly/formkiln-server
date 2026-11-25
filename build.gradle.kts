@@ -37,6 +37,7 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.87")
     implementation("org.apache.pdfbox:pdfbox:3.0.7")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("io.micrometer:micrometer-registry-prometheus")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
@@ -113,5 +114,12 @@ tasks.withType<Test> {
         dependsOn(extractSpec)
         inputs.dir(specDir)
         systemProperty("formkiln.spec.dir", specDir.get().asFile.absolutePath)
+    }
+}
+
+// Version in /actuator/info. No build time, so builds stay reproducible and cacheable.
+springBoot {
+    buildInfo {
+        excludes.set(setOf("time"))
     }
 }

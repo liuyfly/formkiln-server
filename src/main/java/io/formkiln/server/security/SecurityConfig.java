@@ -51,6 +51,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *       must send {@code X-Requested-With: formkiln}: a cross-site page cannot set it without a
  *       CORS preflight, which this server never allows (CSRF defence in addition to the
  *       SameSite=Strict cookie). Service-token requests without the cookie are not affected.
+ *   <li>The metrics token ({@code FORMKILN_METRICS_TOKEN}) only reads {@code /actuator/prometheus};
+ *       the endpoint is closed when it is not set.
  *   <li>Authentication endpoints and runtime writes are rate-limited per client IP.
  * </ul>
  */
@@ -58,6 +60,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class SecurityConfig {
 
     static final String SERVICE = "SERVICE";
+    static final String METRICS = "METRICS";
     public static final String CSRF_HEADER = "X-Requested-With";
     public static final String CSRF_VALUE = "formkiln";
 
@@ -85,6 +88,7 @@ public class SecurityConfig {
             HttpSecurity http,
             AccountService accounts,
             @Value("${formkiln.service-token:}") String serviceToken,
+            @Value("${formkiln.metrics-token:}") String metricsToken,
             @Value("${formkiln.auth-rate-limit:20}") int authRateLimit,
             @Value("${formkiln.runtime-rate-limit:60}") int runtimeRateLimit)
             throws Exception {
@@ -100,7 +104,7 @@ public class SecurityConfig {
                         "Too many attempts. Try again later."), BasicAuthenticationFilter.class)
                 .addFilterBefore(new RateLimitFilter(runtimeRateLimit, Duration.ofMinutes(1), Clock.systemUTC(), RateLimitFilter::isRuntimeWrite,
                         "Too many requests. Try again later."), BasicAuthenticationFilter.class)
-                .addFilterBefore(new ServiceTokenFilter(serviceToken), BasicAuthenticationFilter.class)
+                .addFilterBefore(new ServiceTokenFilter(serviceToken, metricsToken), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         // Streaming responses (CSV export) finish on an async dispatch of a request
@@ -110,6 +114,7 @@ public class SecurityConfig {
                         // rejected); denying them turned every 500 into a 401.
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/prometheus").hasAuthority(METRICS)
                         .requestMatchers("/v1/forms/**").permitAll()
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
                         .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**", "/v1/admin/erasure").hasAuthority("admin")
@@ -212,24 +217,35 @@ public class SecurityConfig {
         }
     }
 
-    /** Authenticates requests that carry the configured service token. */
+    /** Authenticates requests that carry the service token or the metrics token. */
     static final class ServiceTokenFilter extends OncePerRequestFilter {
 
-        private final byte[] token;
+        private final byte[] serviceToken;
+        private final byte[] metricsToken;
 
-        ServiceTokenFilter(String token) {
-            this.token = token == null || token.isBlank() ? null : token.getBytes(StandardCharsets.UTF_8);
+        ServiceTokenFilter(String serviceToken, String metricsToken) {
+            this.serviceToken = bytes(serviceToken);
+            this.metricsToken = bytes(metricsToken);
+        }
+
+        private static byte[] bytes(String token) {
+            return token == null || token.isBlank() ? null : token.getBytes(StandardCharsets.UTF_8);
+        }
+
+        private static boolean matches(byte[] presented, byte[] token) {
+            return token != null && MessageDigest.isEqual(presented, token); // Constant-time comparison.
         }
 
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
             String header = request.getHeader("Authorization");
-            if (token != null && header != null && header.startsWith("Bearer ")) {
+            if (header != null && header.startsWith("Bearer ")) {
                 byte[] presented = header.substring("Bearer ".length()).getBytes(StandardCharsets.UTF_8);
-                if (MessageDigest.isEqual(presented, token)) { // Constant-time comparison.
+                String authority = matches(presented, serviceToken) ? SERVICE : matches(presented, metricsToken) ? METRICS : null;
+                if (authority != null) {
                     SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(
-                            "service", null, List.of(new SimpleGrantedAuthority(SERVICE))));
+                            authority.toLowerCase(), null, List.of(new SimpleGrantedAuthority(authority))));
                 }
             }
             chain.doFilter(request, response);
