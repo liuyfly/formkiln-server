@@ -114,9 +114,21 @@ public class WorkingCopyService {
 
     // ---------------------------------------------------------------- operations
 
+    private static final Pattern SOURCE = Pattern.compile("^[A-Za-z0-9:_.-]{1,100}$");
+
     /** Creates an unpublished form with a skeleton working copy. */
     @Transactional
     public WorkingCopyView create(String key, String title, Actor actor) {
+        return create(key, title, null, null, actor);
+    }
+
+    /**
+     * Creates an unpublished form. Its working copy is {@code document} (a template or a copy of
+     * another form) with the new key and title, or a skeleton. {@code source} names where the
+     * document came from, for the audit log only.
+     */
+    @Transactional
+    public WorkingCopyView create(String key, String title, JsonNode document, String source, Actor actor) {
         if (key == null || !KEY.matcher(key).matches()) {
             throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "invalidKey",
                     "The key must start with a lowercase letter, then letters, digits or underscores (at most 64).");
@@ -125,10 +137,29 @@ public class WorkingCopyService {
         if (name.length() > 200) {
             throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "invalidTitle", "The title must be at most 200 characters.");
         }
+        Map<String, Object> initial;
+        if (document == null || document.isNull()) {
+            initial = skeleton(key, name);
+        } else {
+            if (!document.isObject()) {
+                throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "invalidDocument", "The document must be a JSON object.");
+            }
+            initial = new LinkedHashMap<>(map(json.writeValueAsString(document)));
+            initial.put("key", key);
+            if (title != null && !title.isBlank()) {
+                initial.put("title", name);
+            }
+            if (json.writeValueAsString(initial).getBytes(StandardCharsets.UTF_8).length > MAX_DOCUMENT_BYTES) {
+                throw new RuntimeException4xx(HttpStatus.CONTENT_TOO_LARGE, "documentTooLarge", "The document is larger than 1 MB.");
+            }
+        }
+        if (source != null && !SOURCE.matcher(source).matches()) {
+            throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "invalidSource", "source must be a short identifier.");
+        }
         UUID formId = copies.createForm(key)
                 .orElseThrow(() -> new ConflictException("formExists", "A form with this key exists.", Map.of()));
-        copies.insert(formId, json.writeValueAsString(skeleton(key, name)), null, actor.userId());
-        record(actor, "form.created", key, null);
+        copies.insert(formId, json.writeValueAsString(initial), null, actor.userId());
+        record(actor, "form.created", key, source == null ? null : Map.of("source", source));
         return view(new FormRef(formId, key, null), copies.find(formId).orElseThrow());
     }
 

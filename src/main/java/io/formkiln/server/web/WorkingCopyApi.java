@@ -27,7 +27,13 @@ import tools.jackson.databind.JsonNode;
 @RestController
 public class WorkingCopyApi {
 
-    public record CreateRequest(String key, String title) {}
+    /**
+     * {@code document}: optional initial document (a template or a copy of another form); its key
+     * is replaced, and its title too when {@code title} is given. {@code source}: optional short
+     * identifier of where it came from (for example {@code template:contact} or
+     * {@code form:rentalApplication}), recorded in the audit log.
+     */
+    public record CreateRequest(String key, String title, JsonNode document, String source) {}
 
     public record SaveRequest(Long revision, JsonNode document) {}
 
@@ -57,7 +63,7 @@ public class WorkingCopyApi {
     /** Creates an unpublished form with an empty working copy. */
     @PostMapping("/v1/manage/forms")
     public ResponseEntity<WorkingCopyView> create(@RequestBody CreateRequest body, HttpServletRequest request) {
-        WorkingCopyView created = copies.create(body.key(), body.title(), actor(request));
+        WorkingCopyView created = copies.create(body.key(), body.title(), body.document(), body.source(), actor(request));
         return ResponseEntity.created(URI.create("/v1/manage/forms/" + created.key() + "/working-copy")).body(created);
     }
 
