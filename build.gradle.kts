@@ -9,7 +9,8 @@ plugins {
 }
 
 group = "io.formkiln"
-version = "0.0.1-SNAPSHOT"
+// Release builds pass -PformkilnVersion=0.1.0 (the image build takes it from the git tag).
+version = providers.gradleProperty("formkilnVersion").getOrElse("0.1.0-SNAPSHOT")
 description = "Formkiln server: form definitions, drafts, submissions and server-side validation."
 
 java {
