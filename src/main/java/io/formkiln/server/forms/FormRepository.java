@@ -144,20 +144,28 @@ public class FormRepository {
     /** A submission with the definition of its version (needed to decrypt or mask sensitive fields). */
     public record ListedSubmission(StoredSubmission submission, String definitionJson) {}
 
-    /** Newest first; {@code before} is an exclusive cursor on the submission time. */
-    public List<ListedSubmission> listSubmissions(String key, Instant before, int limit) {
+    /**
+     * Newest first. The exclusive cursor is ({@code before}, {@code beforeId}) — the submission time
+     * and id of the last row of the previous page — so rows that share a submission time are not
+     * skipped. Without {@code beforeId} only the time is compared (older clients).
+     */
+    public List<ListedSubmission> listSubmissions(String key, Instant before, UUID beforeId, int limit) {
         return jdbc.sql("""
                         SELECT s.id, v.version, v.definition::text AS definition, s.data::text AS data, s.outcome,
                                s.submitted_at, s.subject
                         FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id
                         JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key AND (CAST(:before AS timestamptz) IS NULL OR s.submitted_at < :before)
+                        WHERE f.key = :key
+                          AND (CAST(:before AS timestamptz) IS NULL
+                               OR (CAST(:beforeId AS uuid) IS NULL AND s.submitted_at < CAST(:before AS timestamptz))
+                               OR (s.submitted_at, s.id) < (CAST(:before AS timestamptz), CAST(:beforeId AS uuid)))
                         ORDER BY s.submitted_at DESC, s.id DESC
                         LIMIT :limit
                         """)
                 .param("key", key)
                 .param("before", before == null ? null : OffsetDateTime.ofInstant(before, ZoneOffset.UTC))
+                .param("beforeId", beforeId)
                 .param("limit", limit)
                 .query((rs, n) -> new ListedSubmission(
                         new StoredSubmission(

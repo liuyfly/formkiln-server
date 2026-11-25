@@ -208,6 +208,65 @@ class RuntimePlatformTest {
     }
 
     @Test
+    void returnsAVersionWithItsDefinition() throws Exception {
+        mvc.perform(get("/v1/manage/forms/apply/versions/1").header("Authorization", TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.definition.pages[0].elements[1].sensitive").value(true));
+        mvc.perform(get("/v1/manage/forms/apply/versions/9").header("Authorization", TOKEN)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void pagesSubmissionsThatShareATimestamp() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            assertThat(submit("{\"name\": \"n" + i + "\"}", "").getResponse().getStatus()).isEqualTo(201);
+        }
+        jdbc.sql("UPDATE submission SET submitted_at = '2026-01-01T00:00:00Z'").update();
+        List<?> first = json.readValue(mvc.perform(get("/v1/manage/forms/apply/submissions").param("limit", "2")
+                        .header("Authorization", TOKEN)).andReturn().getResponse().getContentAsString(), List.class);
+        Map<?, ?> last = (Map<?, ?>) first.getLast();
+        List<?> second = json.readValue(mvc.perform(get("/v1/manage/forms/apply/submissions").param("limit", "2")
+                        .param("before", (String) last.get("submittedAt")).param("beforeId", (String) last.get("id"))
+                        .header("Authorization", TOKEN)).andReturn().getResponse().getContentAsString(), List.class);
+        assertThat(second).hasSize(1);
+        assertThat(((Map<?, ?>) second.getFirst()).get("id")).isNotIn(first.stream().map(m -> ((Map<?, ?>) m).get("id")).toList());
+    }
+
+    @Test
+    void auditsManagementChanges() throws Exception {
+        mvc.perform(put("/v1/manage/forms/apply/access")
+                .header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"mode\": \"token\"}"));
+        mvc.perform(post("/v1/manage/embed-tokens")
+                .with(user("e").authorities(() -> "editor"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"formKey\": \"apply\", \"ttlSeconds\": 600}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/v1/manage/embed-tokens")
+                .header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"formKey\": \"apply\"}"))
+                .andExpect(status().isOk());
+        String id = (String) body(mvc.perform(post("/v1/manage/forms/apply/webhooks")
+                        .header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"url\": \"https://example.com/hook\"}"))
+                .andReturn()).get("id");
+        mvc.perform(delete("/v1/manage/forms/apply/webhooks/{id}", id).header("Authorization", TOKEN))
+                .andExpect(status().isNoContent());
+
+        assertThat(jdbc.sql("SELECT action || ' ' || coalesce(details::text, '') FROM audit_log ORDER BY at, action")
+                        .query(String.class).list())
+                .containsExactly(
+                        "form.published {\"version\": 1}",
+                        "form.access_changed {\"mode\": \"token\"}",
+                        "embed_token.issued {\"ttlSeconds\": 600}",
+                        "webhook.created {\"id\": \"" + id + "\", \"url\": \"https://example.com/hook\"}",
+                        "webhook.deleted {\"id\": \"" + id + "\"}");
+    }
+
+    @Test
     void viewersCannotReveal() throws Exception {
         mvc.perform(get("/v1/manage/forms/apply/submissions").with(user("v").authorities(() -> "viewer")))
                 .andExpect(status().isOk());

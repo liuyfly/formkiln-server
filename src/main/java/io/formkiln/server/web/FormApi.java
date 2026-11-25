@@ -119,6 +119,13 @@ public class FormApi {
         return new Object[] {"service", null};
     }
 
+    /** Records a management change in the audit log, attributed to the member or the service token. */
+    private void record(String action, String target, Map<String, Object> details, HttpServletRequest request) {
+        Object[] actor = actor();
+        audit.audit((String) actor[0], (UUID) actor[1], action, target, request.getRemoteAddr(),
+                details == null ? null : json.writeValueAsString(details));
+    }
+
     private static boolean hasAuthority(String authority) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return auth != null && auth.getAuthorities().stream().map(GrantedAuthority::getAuthority).anyMatch(authority::equals);
@@ -205,10 +212,18 @@ public class FormApi {
 
     /** Publishes a new immutable version. The body is the form document. */
     @PostMapping("/v1/manage/forms/{key}/versions")
-    public ResponseEntity<Map<String, Object>> publish(@PathVariable String key, @RequestBody JsonNode document) {
+    public ResponseEntity<Map<String, Object>> publish(@PathVariable String key, @RequestBody JsonNode document,
+            HttpServletRequest request) {
         PublishedForm published = forms.publish(key, document);
+        record("form.published", key, Map.of("version", published.version()), request);
         return ResponseEntity.created(URI.create("/v1/manage/forms/" + key + "/versions/" + published.version()))
                 .body(Map.of("key", key, "version", published.version(), "publishedAt", published.publishedAt()));
+    }
+
+    /** One version with its definition (labels, field types; for display and editing). */
+    @GetMapping("/v1/manage/forms/{key}/versions/{version}")
+    public PublishedForm version(@PathVariable String key, @PathVariable int version) {
+        return forms.version(key, version);
     }
 
     @GetMapping("/v1/manage/forms/{key}/versions")
@@ -226,6 +241,7 @@ public class FormApi {
     public List<SubmissionView> submissions(
             @PathVariable String key,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant before,
+            @RequestParam(required = false) UUID beforeId,
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "false") boolean reveal,
             HttpServletRequest request) {
@@ -233,7 +249,7 @@ public class FormApi {
             throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
         }
         Object[] actor = actor();
-        return forms.submissions(key, before, Math.clamp(limit, 1, MAX_PAGE), reveal, (String) actor[0], (UUID) actor[1],
+        return forms.submissions(key, before, beforeId, Math.clamp(limit, 1, MAX_PAGE), reveal, (String) actor[0], (UUID) actor[1],
                 request.getRemoteAddr());
     }
 
@@ -274,14 +290,15 @@ public class FormApi {
     }
 
     @PutMapping("/v1/manage/forms/{key}/access")
-    public Map<String, String> setAccess(@PathVariable String key, @RequestBody AccessRequest body) {
+    public Map<String, String> setAccess(@PathVariable String key, @RequestBody AccessRequest body, HttpServletRequest request) {
         forms.setAccessMode(key, body.mode());
+        record("form.access_changed", key, Map.of("mode", body.mode()), request);
         return Map.of("key", key, "accessMode", body.mode());
     }
 
     /** Issues a short-lived embed token for a token-mode form (for the embedding application's backend). */
     @PostMapping("/v1/manage/embed-tokens")
-    public Map<String, Object> embedToken(@RequestBody EmbedTokenRequest body) {
+    public Map<String, Object> embedToken(@RequestBody EmbedTokenRequest body, HttpServletRequest request) {
         forms.latest(body.formKey() == null ? "" : body.formKey());
         Duration ttl = body.ttlSeconds() == null ? EmbedTokens.DEFAULT_TTL : Duration.ofSeconds(body.ttlSeconds());
         if (ttl.isNegative() || ttl.isZero() || ttl.compareTo(EmbedTokens.MAX_TTL) > 0) {
@@ -291,6 +308,10 @@ public class FormApi {
             throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "invalidSubject", "subject must be at most 256 characters.");
         }
         EmbedTokens.Claims claims = embedTokens.issue(body.formKey(), body.subject(), ttl);
+        // Service backends issue a token per end user; record member-issued (test) tokens only.
+        if (!hasAuthority("SERVICE")) {
+            record("embed_token.issued", body.formKey(), Map.of("ttlSeconds", ttl.toSeconds()), request);
+        }
         return Map.of("token", embedTokens.encode(claims), "expiresAt", claims.expiresAt());
     }
 
@@ -301,13 +322,17 @@ public class FormApi {
 
     /** Creates a webhook; the signing secret is returned only in this response. */
     @PostMapping("/v1/manage/forms/{key}/webhooks")
-    public ResponseEntity<EndpointView> createWebhook(@PathVariable String key, @RequestBody WebhookRequest body) {
-        return ResponseEntity.status(201).body(webhooks.create(key, body.url()));
+    public ResponseEntity<EndpointView> createWebhook(@PathVariable String key, @RequestBody WebhookRequest body,
+            HttpServletRequest request) {
+        EndpointView created = webhooks.create(key, body.url());
+        record("webhook.created", key, Map.of("id", created.id(), "url", created.url()), request);
+        return ResponseEntity.status(201).body(created);
     }
 
     @DeleteMapping("/v1/manage/forms/{key}/webhooks/{id}")
-    public ResponseEntity<Void> deleteWebhook(@PathVariable String key, @PathVariable UUID id) {
+    public ResponseEntity<Void> deleteWebhook(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
         webhooks.delete(key, id);
+        record("webhook.deleted", key, Map.of("id", id.toString()), request);
         return ResponseEntity.noContent().build();
     }
 
@@ -317,7 +342,9 @@ public class FormApi {
     }
 
     @PostMapping("/v1/manage/forms/{key}/webhook-deliveries/{id}/redeliver")
-    public DeliveryView redeliver(@PathVariable String key, @PathVariable UUID id) {
-        return webhooks.redeliver(key, id);
+    public DeliveryView redeliver(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
+        DeliveryView delivery = webhooks.redeliver(key, id);
+        record("webhook.redelivered", key, Map.of("deliveryId", id.toString()), request);
+        return delivery;
     }
 }
