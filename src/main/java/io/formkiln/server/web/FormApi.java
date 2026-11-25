@@ -76,6 +76,8 @@ public class FormApi {
 
     public record DraftRequest(JsonNode answers) {}
 
+    public record ResumeLinkRequest(String email, String locale) {}
+
     public record AccessRequest(String mode) {}
 
     public record EmbedTokenRequest(String formKey, String subject, Long ttlSeconds) {}
@@ -177,6 +179,17 @@ public class FormApi {
             @RequestHeader(value = DRAFT_HEADER, required = false) String token,
             @RequestBody DraftRequest body) {
         return drafts.save(forms.access(key, auth).formId(), token, answers(body.answers()));
+    }
+
+    /** Emails a link that reopens the draft (when the form offers it). */
+    @PostMapping("/v1/forms/{key}/drafts/resume-link")
+    public ResponseEntity<Void> resumeLink(
+            @PathVariable String key,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
+            @RequestHeader(value = DRAFT_HEADER, required = false) String token,
+            @RequestBody ResumeLinkRequest body) {
+        forms.requestResumeLink(key, forms.access(key, auth), token, body.email(), body.locale());
+        return ResponseEntity.accepted().build();
     }
 
     @DeleteMapping("/v1/forms/{key}/drafts")

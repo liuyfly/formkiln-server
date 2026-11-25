@@ -56,6 +56,12 @@ public class DraftService {
                 .orElseThrow(() -> new RuntimeException4xx(HttpStatus.NOT_FOUND, "draftNotFound", "The draft does not exist or has expired."));
     }
 
+    /** The id of a valid draft (404 when the token is wrong or the draft expired). */
+    @Transactional(readOnly = true)
+    public UUID idOf(UUID formId, String token) {
+        return find(formId, token).id();
+    }
+
     @Transactional
     public DraftCreated create(UUID formId, Map<String, Object> answers) {
         String token = Secrets.newToken();

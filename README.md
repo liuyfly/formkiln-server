@@ -38,6 +38,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API (acts as an editor). Disabled when empty. |
 | `FORMKILN_BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Invited as the first admin when there are no members yet |
 | `FORMKILN_ADMIN_URL` | `http://localhost:3200` | Base URL of the admin app, used in invitation and reset links |
+| `FORMKILN_HOSTED_URL` | `http://localhost:3100` | Public URL of the hosted fill-in site, used in "continue later" emails |
 | `FORMKILN_SMTP_HOST` / `FORMKILN_SMTP_PORT` | `localhost` / `1025` | SMTP server (Mailpit in development). For authenticated SMTP set `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD` and `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE=true`. |
 | `FORMKILN_MAIL_FROM` | `Formkiln <no-reply@localhost>` | Sender of account emails |
 | `FORMKILN_COOKIE_SECURE` | `true` | `Secure` flag of the session cookie (browsers accept it on `http://localhost`) |
@@ -91,6 +92,7 @@ Writes are rate-limited per client IP (`FORMKILN_RUNTIME_RATE_LIMIT`, default 60
 | `POST` | `/v1/forms/{key}/submissions` | Body `{ "version"?, "answers", "locale"?, "draftToken"?, "captchaToken"?, "honeypot"? }`. The server re-validates the answers against that version (default: latest) at the time of receipt. Returns `201 { id, version, outcome, submittedAt }`, or `422` with `[{ path, code, message?, params? }]`. Only the submission data (active, non-null values) is stored; `sensitive` fields are encrypted at rest. A non-empty `honeypot` is silently dropped. Public forms need a valid `captchaToken` when Turnstile is configured (`400 captchaFailed`). The draft named by `draftToken` is deleted. |
 | `POST` | `/v1/forms/{key}/drafts` | `{ answers }` → `201 { token, savedAt, expiresAt }`. Drafts are encrypted, expire after 30 days and hold at most 256 KB. |
 | `GET` / `PUT` / `DELETE` | `/v1/forms/{key}/drafts` | Read, replace (`{ answers }`) or delete the draft named by the `Formkiln-Draft: <token>` header |
+| `POST` | `/v1/forms/{key}/drafts/resume-link` | `{ email, locale? }` with the `Formkiln-Draft` header → `202`: emails a link that reopens the draft (`<hosted>/f/<key>#draft=<token>`). Only public forms with the option enabled (`resumeByEmail` in the form response); at most 3 emails per draft and day (`429 tooManyEmails`). |
 | `POST` | `/v1/forms/{key}/files` | Multipart `field`, `file` → `201 { id, name, size, contentType }`: the reference to put in the file field's answer. Checked against the field's `accept` / `fileTypes` (`415`) and `maxFileSize` and `FORMKILN_MAX_FILE_SIZE` (`413`). Files not claimed by a submission within a day are removed; a file can be claimed once. |
 
 ### Management (signed-in member, or `Authorization: Bearer $FORMKILN_SERVICE_TOKEN`)
@@ -136,6 +138,17 @@ invalid while it is edited; its `problems` are returned with every read and save
 | `POST` | `/v1/manage/forms/{key}/working-copy/publish` | `{ revision, acknowledgeChanges }` → `201 { key, version, publishedAt }` and the copy is removed. `422` with `errors` when invalid; `409 changesNotAcknowledged` with `changes` until they are acknowledged. |
 
 Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `working_copy.discarded`.
+
+### Email notifications
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` / `PUT` | `/v1/manage/forms/{key}/notifications` | `{ teamRecipients, teamIncludeAnswers, confirmationEnabled, confirmationEmailField, confirmationSubject, confirmationBody, resumeEnabled }` (editors change them; audited as `notifications.updated`). |
+| `GET` | `/v1/manage/forms/{key}/mail?limit=50` | Recent emails of the form: kind, masked recipient, status (`pending`, `sent`, `dead`), attempts, last error. |
+
+- **Team notification** to up to 20 addresses on every submission, with a link to the form in the admin. With `teamIncludeAnswers` it lists the answers too.
+- **Confirmation** to the address in `confirmationEmailField` when it holds a valid email. The subject and body are plain-text templates with `{{form.title}}`, `{{submission.id}}`, `{{submission.submittedAt}}`, `{{answers}}` (label: value lines) and `{{answer.<key>}}`. Subjects are kept on one line.
+- **Sensitive fields never appear in email.** Messages are queued in the submission's transaction, encrypted at rest, sent by a background job (`FORMKILN_MAIL_POLL_INTERVAL`, default 5 s) and retried 5 times (1 minute, doubling).
 
 ### Webhooks
 

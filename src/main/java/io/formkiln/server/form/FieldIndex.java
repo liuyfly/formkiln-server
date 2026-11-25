@@ -13,6 +13,13 @@ import java.util.Set;
 /** Facts about the fields of a form document that the platform needs outside validation. */
 public final class FieldIndex {
 
+    /**
+     * A top-level answer (field or repeater) for display: its label (a string or a locale map),
+     * type, whether it is sensitive, its options and, for repeaters, its child fields.
+     */
+    public record AnswerField(String key, String type, Object label, boolean sensitive, List<Map<String, Object>> options,
+            List<AnswerField> children) {}
+
     /** Upload rules of a file field (Form Schema §6.4, §9). */
     public record FileRule(String key, boolean multiple, List<String> accept, List<String> fileTypes, Long maxFileSize) {}
 
@@ -21,6 +28,7 @@ public final class FieldIndex {
     private final Map<String, FileRule> fileFields = new HashMap<>();
     private final Map<String, String> repeaterOfFileField = new HashMap<>();
     private final List<String> answerKeys = new ArrayList<>();
+    private final List<AnswerField> answerFields = new ArrayList<>();
 
     private FieldIndex() {}
 
@@ -32,6 +40,13 @@ public final class FieldIndex {
             if ((node.kind == Kind.FIELD || node.kind == Kind.REPEATER) && node.repeater == null
                     && !index.answerKeys.contains(node.key)) {
                 index.answerKeys.add(node.key);
+                List<AnswerField> children = new ArrayList<>();
+                if (node.kind == Kind.REPEATER) {
+                    for (Node child : FormModel.repeaterChildFields(node)) {
+                        children.add(answerField(child, List.of()));
+                    }
+                }
+                index.answerFields.add(answerField(node, children));
             }
             if (node.kind != Kind.FIELD) {
                 continue;
@@ -63,6 +78,17 @@ public final class FieldIndex {
             }
         }
         return index;
+    }
+
+    private static AnswerField answerField(Node node, List<AnswerField> children) {
+        String type = node.kind == Kind.REPEATER ? "repeater" : node.type();
+        return new AnswerField(node.key, type, node.get("label"), Boolean.TRUE.equals(node.get("sensitive")),
+                FormModel.list(node.get("options")), children);
+    }
+
+    /** Top-level answers (fields and repeaters outside repeaters) in document order, for display. */
+    public List<AnswerField> answerFields() {
+        return answerFields;
     }
 
     /** Top-level answer keys (fields and repeaters outside repeaters) in document order. */
