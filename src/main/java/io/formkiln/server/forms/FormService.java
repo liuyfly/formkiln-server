@@ -167,6 +167,13 @@ public class FormService {
                 .orElseThrow(() -> new NotFoundException("Form " + key + " is not published"));
     }
 
+    /** One published version with its definition. */
+    @Transactional(readOnly = true)
+    public PublishedForm version(String key, int version) {
+        return repository.findVersion(key, version).map(this::view)
+                .orElseThrow(() -> new NotFoundException("Form " + key + " version " + version + " is not published"));
+    }
+
     @Transactional(readOnly = true)
     public List<PublishedForm> versions(String key) {
         List<PublishedForm> versions = repository.listVersions(key).stream().map(this::view).toList();
@@ -323,13 +330,13 @@ public class FormService {
      * is recorded in the audit log.
      */
     @Transactional
-    public List<SubmissionView> submissions(String key, Instant before, int limit, boolean reveal, String actorType, UUID actorId,
-            String ip) {
+    public List<SubmissionView> submissions(String key, Instant before, UUID beforeId, int limit, boolean reveal, String actorType,
+            UUID actorId, String ip) {
         latest(key);
         if (reveal) {
             audit.audit(actorType, actorId, "submissions.revealed", key, ip, null);
         }
-        return repository.listSubmissions(key, before, limit).stream()
+        return repository.listSubmissions(key, before, beforeId, limit).stream()
                 .map(listed -> {
                     StoredSubmission s = listed.submission();
                     FieldIndex fields = FieldIndex.of(canonical(listed.definitionJson()));

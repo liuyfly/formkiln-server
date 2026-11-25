@@ -101,8 +101,9 @@ Viewers can read; editors (and the service token) can also write.
 | --- | --- | --- |
 | `GET` | `/v1/manage/forms` | Forms with their latest version, access mode and submission count |
 | `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
+| `GET` | `/v1/manage/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
 | `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |
-| `GET` | `/v1/manage/forms/{key}/submissions?limit=50&before=<submittedAt>&reveal=false` | Submissions, newest first, paginated by submission time. Sensitive values are masked (`••••`); `reveal=true` (editors only) shows them and is audited. |
+| `GET` | `/v1/manage/forms/{key}/submissions?limit=50&before=<submittedAt>&beforeId=<id>&reveal=false` | Submissions, newest first. For the next page pass the `submittedAt` and `id` of the last row (`beforeId` keeps rows that share a time from being skipped). Sensitive values are masked (`••••`); `reveal=true` (editors only) shows them and is audited. |
 | `GET` | `/v1/manage/forms/{key}/submissions/export?reveal=false` | All submissions as CSV (UTF-8 with BOM), newest first: `id, version, outcome, submittedAt, subject`, then the answer keys of the latest version and keys only older versions have. File fields list file names; repeaters and composite values are JSON. Text that a spreadsheet would run as a formula is prefixed with `'`. Sensitive values are masked unless `reveal=true` (editors only). Audited. |
 | `GET` | `/v1/manage/forms/{key}/files/{id}` | Download a submitted file (audited) |
 | `PUT` | `/v1/manage/forms/{key}/access` | `{ mode: "public" \| "token" }` |
@@ -111,6 +112,11 @@ Viewers can read; editors (and the service token) can also write.
 | `DELETE` | `/v1/manage/forms/{key}/webhooks/{id}` | Delete a webhook (pending deliveries are dropped) |
 | `GET` | `/v1/manage/forms/{key}/webhooks/{id}/deliveries` | Recent deliveries with status, attempts and last error |
 | `POST` | `/v1/manage/forms/{key}/webhook-deliveries/{id}/redeliver` | Queue a delivery again |
+
+Management changes are written to the audit log with the member (or `service`) and client IP:
+`form.published`, `form.access_changed`, `embed_token.issued` (by members only; backends issue one
+per end user), `webhook.created`, `webhook.deleted`, `webhook.redelivered`, as well as
+`submissions.revealed`, `submissions.exported` and `file.downloaded`.
 
 ### Webhooks
 
