@@ -195,6 +195,33 @@ class WorkingCopyTest {
     }
 
     @Test
+    void createsAFormFromADocument() throws Exception {
+        String template = document("contactTemplate", FIELDS);
+        mvc.perform(post("/v1/manage/forms")
+                        .header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"key\": \"contact\", \"title\": \"Contact us\", \"source\": \"template:contact\", \"document\": " + template + "}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.document.key").value("contact"))
+                .andExpect(jsonPath("$.document.title").value("Contact us"))
+                .andExpect(jsonPath("$.document.pages[0].elements", hasSize(2)))
+                .andExpect(jsonPath("$.problems", hasSize(0)));
+        assertThat(jdbc.sql("SELECT details::text FROM audit_log WHERE action = 'form.created'").query(String.class).single())
+                .isEqualTo("{\"source\": \"template:contact\"}");
+        mvc.perform(post("/v1/manage/forms")
+                        .header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"key\": \"other\", \"document\": [1]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("invalidDocument"));
+        mvc.perform(post("/v1/manage/forms")
+                        .header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"key\": \"other\", \"source\": \"<script>\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void viewersReadEditorsWrite() throws Exception {
         create("survey");
         mvc.perform(get("/v1/manage/forms/survey/working-copy").with(user("v").authorities(() -> "viewer")))

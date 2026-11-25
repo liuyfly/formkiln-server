@@ -128,7 +128,7 @@ invalid while it is edited; its `problems` are returned with every read and save
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/v1/manage/forms` | `{ key, title }` → `201`: an unpublished form with a one-page working copy. `409 formExists`, `400 invalidKey`. Not served at runtime until published. |
+| `POST` | `/v1/manage/forms` | `{ key, title, document?, source? }` → `201`: an unpublished form. Its working copy is `document` (a template or a copy of another form, with the new key and, if given, title) or a one-page skeleton. `source` (for example `template:contact`) is recorded in the audit log. `409 formExists`, `400 invalidKey`. Not served at runtime until published. |
 | `GET` | `/v1/manage/forms/{key}/working-copy` | `{ key, revision, baseVersion, latestVersion, document, updatedAt, updatedBy, problems }`. Without a saved copy, the latest published definition with `revision: 0`. |
 | `PUT` | `/v1/manage/forms/{key}/working-copy` | `{ revision, document }` (`revision: 0` for the first save) → the saved copy with its new revision. Documents up to 1 MB. |
 | `DELETE` | `/v1/manage/forms/{key}/working-copy` | Discard the copy; editing starts again from the published version (`409 neverPublished` for unpublished forms). |
