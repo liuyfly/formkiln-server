@@ -109,7 +109,7 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/v1/forms/**").permitAll()
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
-                        .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**").hasAuthority("admin")
+                        .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**", "/v1/admin/erasure").hasAuthority("admin")
                         .requestMatchers("/v1/admin/invitations", "/v1/admin/invitations/*", "/v1/admin/invitations/*/resend")
                                 .hasAuthority("admin")
                         .requestMatchers("/v1/admin/**").hasAuthority("viewer")
