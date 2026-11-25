@@ -31,6 +31,7 @@ services:
       FORMKILN_DB_URL: jdbc:postgresql://postgres:5432/formkiln
       FORMKILN_DB_USERNAME: formkiln
       FORMKILN_DB_PASSWORD: formkiln
+      FORMKILN_SERVICE_TOKEN: ${FORMKILN_SERVICE_TOKEN:-}
     ports:
       - "8080:8080"
     depends_on:
