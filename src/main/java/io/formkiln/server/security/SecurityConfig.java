@@ -3,6 +3,7 @@ package io.formkiln.server.security;
 import io.formkiln.server.accounts.AccountService;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.web.AdminApi;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -102,6 +103,9 @@ public class SecurityConfig {
                 .addFilterBefore(new ServiceTokenFilter(serviceToken), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
+                        // Streaming responses (CSV export) finish on an async dispatch of a request
+                        // that was already authorized.
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/v1/forms/**").permitAll()
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
