@@ -6,7 +6,9 @@ COPY gradlew settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle ./gradle
 RUN ./gradlew --no-daemon dependencies > /dev/null
 COPY src ./src
-RUN ./gradlew --no-daemon bootJar \
+# Shown in /actuator/info; set by the image workflow (release tag, or "edge").
+ARG VERSION
+RUN ./gradlew --no-daemon bootJar ${VERSION:+-PformkilnVersion=$VERSION} \
     && cp build/libs/*.jar app.jar
 
 FROM eclipse-temurin:21-jre
