@@ -6,6 +6,7 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -14,6 +15,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.sun.net.httpserver.HttpServer;
@@ -161,6 +163,48 @@ class RuntimePlatformTest {
                 .andExpect(jsonPath("$[0].data.ssn").value("123-45-6789"));
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'submissions.revealed'").query(Long.class).single())
                 .isEqualTo(1);
+    }
+
+    private String export(String reveal) throws Exception {
+        MvcResult started = mvc.perform(get("/v1/manage/forms/apply/submissions/export").param("reveal", reveal)
+                        .header("Authorization", TOKEN))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        MvcResult done = mvc.perform(asyncDispatch(started))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition", startsWith("attachment; filename=\"apply-submissions-")))
+                .andReturn();
+        return done.getResponse().getContentAsString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void exportsSubmissionsAsCsv() throws Exception {
+        assertThat(submit("{\"name\": \"=HYPERLINK(1)\", \"ssn\": \"123-45\"}", "").getResponse().getStatus()).isEqualTo(201);
+        assertThat(submit("{\"name\": \"Lovelace, \\\"Ada\\\"\"}", "").getResponse().getStatus()).isEqualTo(201);
+        // A second version renames a field; the old key stays as a trailing column.
+        mvc.perform(post("/v1/manage/forms/apply/versions")
+                        .header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(FORM.replace("\"key\": \"ssn\"", "\"key\": \"taxId\"")))
+                .andExpect(status().isCreated());
+
+        String masked = export("false");
+        String[] lines = masked.split("\r\n");
+        assertThat(lines[0]).isEqualTo("\uFEFFid,version,outcome,submittedAt,subject,name,taxId,doc,ssn");
+        assertThat(lines).hasSize(3);
+        assertThat(lines[1]).contains(",1,done,").contains(",\"Lovelace, \"\"Ada\"\"\",");
+        assertThat(lines[2]).contains(",'=HYPERLINK(1),,,••••");
+        assertThat(export("true")).contains(",'=HYPERLINK(1),,,123-45").doesNotContain("••••");
+        assertThat(jdbc.sql("SELECT details::text FROM audit_log WHERE action = 'submissions.exported' ORDER BY at")
+                        .query(String.class).list())
+                .containsExactly("{\"reveal\": false}", "{\"reveal\": true}");
+
+        mvc.perform(get("/v1/manage/forms/apply/submissions/export").param("reveal", "true")
+                        .with(user("v").authorities(() -> "viewer")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v1/manage/forms/missing/submissions/export").header("Authorization", TOKEN))
+                .andExpect(status().isNotFound());
     }
 
     @Test

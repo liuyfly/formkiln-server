@@ -141,10 +141,10 @@ public class FormRepository {
                 .single();
     }
 
-    /** Newest first; {@code before} is an exclusive cursor on the submission time. */
     /** A submission with the definition of its version (needed to decrypt or mask sensitive fields). */
     public record ListedSubmission(StoredSubmission submission, String definitionJson) {}
 
+    /** Newest first; {@code before} is an exclusive cursor on the submission time. */
     public List<ListedSubmission> listSubmissions(String key, Instant before, int limit) {
         return jdbc.sql("""
                         SELECT s.id, v.version, v.definition::text AS definition, s.data::text AS data, s.outcome,
@@ -168,6 +168,36 @@ public class FormRepository {
                                 instant(rs.getObject("submitted_at", OffsetDateTime.class)),
                                 rs.getString("subject")),
                         rs.getString("definition")))
+                .list();
+    }
+
+    /**
+     * A page of submissions with their version number, newest first, after the keyset cursor
+     * ({@code afterAt}, {@code afterId}) exclusive. Used by the export, which must not skip rows
+     * that share a submission time.
+     */
+    public List<StoredSubmission> exportPage(String key, Instant afterAt, UUID afterId, int limit) {
+        return jdbc.sql("""
+                        SELECT s.id, v.version, s.data::text AS data, s.outcome, s.submitted_at, s.subject
+                        FROM submission s
+                        JOIN form_version v ON v.id = s.form_version_id
+                        JOIN form f ON f.id = v.form_id
+                        WHERE f.key = :key
+                          AND (CAST(:at AS timestamptz) IS NULL OR (s.submitted_at, s.id) < (CAST(:at AS timestamptz), CAST(:id AS uuid)))
+                        ORDER BY s.submitted_at DESC, s.id DESC
+                        LIMIT :limit
+                        """)
+                .param("key", key)
+                .param("at", afterAt == null ? null : OffsetDateTime.ofInstant(afterAt, ZoneOffset.UTC))
+                .param("id", afterId)
+                .param("limit", limit)
+                .query((rs, n) -> new StoredSubmission(
+                        rs.getObject("id", UUID.class),
+                        rs.getInt("version"),
+                        rs.getString("data"),
+                        rs.getString("outcome"),
+                        instant(rs.getObject("submitted_at", OffsetDateTime.class)),
+                        rs.getString("subject")))
                 .list();
     }
 }

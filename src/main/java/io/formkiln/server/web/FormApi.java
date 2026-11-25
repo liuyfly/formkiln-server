@@ -13,6 +13,7 @@ import io.formkiln.server.forms.FormService.PublishedForm;
 import io.formkiln.server.forms.FormService.RuntimeForm;
 import io.formkiln.server.forms.FormService.SubmissionInput;
 import io.formkiln.server.forms.FormService.SubmissionView;
+import io.formkiln.server.forms.SubmissionExport;
 import io.formkiln.server.platform.DraftService;
 import io.formkiln.server.platform.DraftService.DraftCreated;
 import io.formkiln.server.platform.DraftService.DraftView;
@@ -31,6 +32,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -55,6 +58,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -85,10 +89,11 @@ public class FormApi {
     private final EmbedTokens embedTokens;
     private final AccountRepository audit;
     private final PlatformRepository platform;
+    private final SubmissionExport export;
     private final JsonMapper json;
 
     public FormApi(FormService forms, DraftService drafts, FileService files, WebhookService webhooks, EmbedTokens embedTokens,
-            AccountRepository audit, PlatformRepository platform, JsonMapper json) {
+            AccountRepository audit, PlatformRepository platform, SubmissionExport export, JsonMapper json) {
         this.forms = forms;
         this.drafts = drafts;
         this.files = files;
@@ -96,6 +101,7 @@ public class FormApi {
         this.embedTokens = embedTokens;
         this.audit = audit;
         this.platform = platform;
+        this.export = export;
         this.json = json;
     }
 
@@ -229,6 +235,26 @@ public class FormApi {
         Object[] actor = actor();
         return forms.submissions(key, before, Math.clamp(limit, 1, MAX_PAGE), reveal, (String) actor[0], (UUID) actor[1],
                 request.getRemoteAddr());
+    }
+
+    /**
+     * Exports all submissions as CSV (audited). Sensitive values are masked unless {@code reveal=true}
+     * (editors only).
+     */
+    @GetMapping("/v1/manage/forms/{key}/submissions/export")
+    public ResponseEntity<StreamingResponseBody> export(
+            @PathVariable String key, @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
+        if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
+            throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
+        }
+        Object[] actor = actor();
+        SubmissionExport.Prepared prepared = export.prepare(key, reveal, (String) actor[0], (UUID) actor[1], request.getRemoteAddr());
+        String filename = key + "-submissions-" + LocalDate.now(ZoneOffset.UTC) + ".csv";
+        return ResponseEntity.ok()
+                .contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(filename).build().toString())
+                .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                .body(output -> export.write(prepared, output));
     }
 
     /** Downloads a file of a submission (audited). */

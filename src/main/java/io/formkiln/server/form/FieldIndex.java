@@ -2,6 +2,7 @@ package io.formkiln.server.form;
 
 import io.formkiln.server.form.FormModel.Kind;
 import io.formkiln.server.form.FormModel.Node;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -19,6 +20,7 @@ public final class FieldIndex {
     private final Map<String, Set<String>> sensitiveInRepeater = new HashMap<>();
     private final Map<String, FileRule> fileFields = new HashMap<>();
     private final Map<String, String> repeaterOfFileField = new HashMap<>();
+    private final List<String> answerKeys = new ArrayList<>();
 
     private FieldIndex() {}
 
@@ -27,6 +29,10 @@ public final class FieldIndex {
         FieldIndex index = new FieldIndex();
         FormModel model = FormModel.build(document);
         for (Node node : model.nodes) {
+            if ((node.kind == Kind.FIELD || node.kind == Kind.REPEATER) && node.repeater == null
+                    && !index.answerKeys.contains(node.key)) {
+                index.answerKeys.add(node.key);
+            }
             if (node.kind != Kind.FIELD) {
                 continue;
             }
@@ -57,6 +63,11 @@ public final class FieldIndex {
             }
         }
         return index;
+    }
+
+    /** Top-level answer keys (fields and repeaters outside repeaters) in document order. */
+    public List<String> answerKeys() {
+        return answerKeys;
     }
 
     public Set<String> sensitiveTop() {
