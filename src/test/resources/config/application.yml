@@ -2,3 +2,12 @@
 formkiln:
   encryption-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
   auth-rate-limit: 1000
+  runtime-rate-limit: 1000
+  max-file-size: 1MB
+  scheduling:
+    enabled: false
+  storage:
+    path: build/test-files
+  webhooks:
+    allow-http: true
+    allow-private-networks: true

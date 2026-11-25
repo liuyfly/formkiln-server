@@ -12,6 +12,11 @@ spring:
   flyway:
     locations: classpath:db/migration
 
+  servlet:
+    multipart:
+      max-file-size: ${FORMKILN_MAX_FILE_SIZE:10MB}
+      max-request-size: ${FORMKILN_MAX_REQUEST_SIZE:12MB}
+
   mail:
     host: ${FORMKILN_SMTP_HOST:localhost}
     port: ${FORMKILN_SMTP_PORT:1025}
@@ -33,10 +38,38 @@ formkiln:
   bootstrap-admin-email: ${FORMKILN_BOOTSTRAP_ADMIN_EMAIL:}
   # Requests per minute and client IP to the public authentication endpoints.
   auth-rate-limit: ${FORMKILN_AUTH_RATE_LIMIT:20}
+  # Requests per minute and client IP to runtime writes (submissions, drafts, uploads).
+  runtime-rate-limit: ${FORMKILN_RUNTIME_RATE_LIMIT:60}
+  # Largest accepted upload; a field's maxFileSize can only lower it.
+  max-file-size: ${FORMKILN_MAX_FILE_SIZE:10MB}
+  storage:
+    # filesystem or s3
+    type: ${FORMKILN_STORAGE:filesystem}
+    path: ${FORMKILN_STORAGE_PATH:./data/files}
+    s3:
+      bucket: ${FORMKILN_S3_BUCKET:}
+      region: ${FORMKILN_S3_REGION:us-east-1}
+      # Set for S3-compatible stores (MinIO, R2...); leave empty for AWS.
+      endpoint: ${FORMKILN_S3_ENDPOINT:}
+      path-style: ${FORMKILN_S3_PATH_STYLE:false}
+      # Leave empty to use the default AWS credentials chain (instance role, env, profile).
+      access-key: ${FORMKILN_S3_ACCESS_KEY:}
+      secret-key: ${FORMKILN_S3_SECRET_KEY:}
+  # Cloudflare Turnstile for public forms. Disabled when the secret is empty.
+  turnstile:
+    site-key: ${FORMKILN_TURNSTILE_SITE_KEY:}
+    secret: ${FORMKILN_TURNSTILE_SECRET:}
+  webhooks:
+    poll-interval: ${FORMKILN_WEBHOOK_POLL_INTERVAL:5000}
+    # Development only: allow http:// URLs and private/loopback destinations.
+    allow-http: ${FORMKILN_WEBHOOKS_ALLOW_HTTP:false}
+    allow-private-networks: ${FORMKILN_WEBHOOKS_ALLOW_PRIVATE_NETWORKS:false}
 
 server:
   port: ${FORMKILN_PORT:8080}
   shutdown: graceful
+  # Trust X-Forwarded-For only from internal proxies (such as the hosted app), for per-IP limits.
+  forward-headers-strategy: native
 
 management:
   endpoints:

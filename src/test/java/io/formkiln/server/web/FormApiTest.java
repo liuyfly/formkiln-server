@@ -43,7 +43,7 @@ class FormApiTest {
     @BeforeEach
     void setUp() throws Exception {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
-        jdbc.sql("TRUNCATE submission, form_version, form").update();
+        jdbc.sql("TRUNCATE submission, form_version, form CASCADE").update();
         example = Files.readString(Path.of(System.getProperty("formkiln.spec.dir"), "examples", "rental-application.json"));
     }
 

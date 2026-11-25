@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -49,7 +50,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *       must send {@code X-Requested-With: formkiln}: a cross-site page cannot set it without a
  *       CORS preflight, which this server never allows (CSRF defence in addition to the
  *       SameSite=Strict cookie). Service-token requests without the cookie are not affected.
- *   <li>Authentication endpoints are rate-limited per client IP.
+ *   <li>Authentication endpoints and runtime writes are rate-limited per client IP.
  * </ul>
  */
 @Configuration
@@ -83,7 +84,8 @@ public class SecurityConfig {
             HttpSecurity http,
             AccountService accounts,
             @Value("${formkiln.service-token:}") String serviceToken,
-            @Value("${formkiln.auth-rate-limit:20}") int authRateLimit)
+            @Value("${formkiln.auth-rate-limit:20}") int authRateLimit,
+            @Value("${formkiln.runtime-rate-limit:60}") int runtimeRateLimit)
             throws Exception {
         return http
                 .csrf(csrf -> csrf.disable()) // Replaced by CsrfHeaderFilter (custom header) + SameSite=Strict.
@@ -93,7 +95,10 @@ public class SecurityConfig {
                 .logout(logout -> logout.disable())
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(new CsrfHeaderFilter(), BasicAuthenticationFilter.class)
-                .addFilterBefore(new RateLimitFilter(authRateLimit, Duration.ofMinutes(1), Clock.systemUTC()), BasicAuthenticationFilter.class)
+                .addFilterBefore(new RateLimitFilter(authRateLimit, Duration.ofMinutes(1), Clock.systemUTC(), RateLimitFilter::isPublicAuth,
+                        "Too many attempts. Try again later."), BasicAuthenticationFilter.class)
+                .addFilterBefore(new RateLimitFilter(runtimeRateLimit, Duration.ofMinutes(1), Clock.systemUTC(), RateLimitFilter::isRuntimeWrite,
+                        "Too many requests. Try again later."), BasicAuthenticationFilter.class)
                 .addFilterBefore(new ServiceTokenFilter(serviceToken), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
@@ -146,24 +151,40 @@ public class SecurityConfig {
         }
     }
 
-    /** Fixed-window rate limit for the public authentication endpoints, per client IP. */
+    /**
+     * Fixed-window rate limit per client IP, for the requests a predicate selects (the public
+     * authentication endpoints; runtime writes such as submissions, drafts and uploads).
+     */
     static final class RateLimitFilter extends OncePerRequestFilter {
         private record Window(Instant start, int count) {}
 
         private final int limit;
         private final Duration window;
         private final Clock clock;
+        private final Predicate<HttpServletRequest> applies;
+        private final String message;
         private final Map<String, Window> windows = new ConcurrentHashMap<>();
 
-        RateLimitFilter(int limit, Duration window, Clock clock) {
+        RateLimitFilter(int limit, Duration window, Clock clock, Predicate<HttpServletRequest> applies, String message) {
             this.limit = limit;
             this.window = window;
             this.clock = clock;
+            this.applies = applies;
+            this.message = message;
+        }
+
+        static boolean isPublicAuth(HttpServletRequest request) {
+            return "POST".equals(request.getMethod()) && List.of(PUBLIC_ADMIN).contains(request.getRequestURI());
+        }
+
+        static boolean isRuntimeWrite(HttpServletRequest request) {
+            return !"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())
+                    && !"OPTIONS".equals(request.getMethod()) && request.getRequestURI().startsWith("/v1/forms/");
         }
 
         @Override
         protected boolean shouldNotFilter(HttpServletRequest request) {
-            return !"POST".equals(request.getMethod()) || !List.of(PUBLIC_ADMIN).contains(request.getRequestURI());
+            return !applies.test(request);
         }
 
         @Override
@@ -177,7 +198,7 @@ public class SecurityConfig {
                     w == null || !w.start().plus(window).isAfter(now) ? new Window(now, 1) : new Window(w.start(), w.count() + 1));
             if (current.count() > limit) {
                 response.setHeader("Retry-After", String.valueOf(window.toSeconds()));
-                reject(response, HttpStatus.TOO_MANY_REQUESTS, "rateLimited", "Too many attempts. Try again later.");
+                reject(response, HttpStatus.TOO_MANY_REQUESTS, "rateLimited", message);
                 return;
             }
             chain.doFilter(request, response);
