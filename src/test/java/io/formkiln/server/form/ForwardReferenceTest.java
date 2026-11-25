@@ -11,7 +11,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * A rule may reference a field later in the document. Also covered by the spec's validation
- * conformance cases (rules.json) from @formkiln/spec 0.3.1.
+ * conformance cases (rules.json) from @formkiln/spec 0.4.0.
  */
 class ForwardReferenceTest {
 
