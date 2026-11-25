@@ -99,7 +99,7 @@ Viewers can read; editors (and the service token) can also write.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms` | Forms with their latest version, access mode and submission count |
+| `GET` | `/v1/manage/forms` | Forms with their latest version (`null` until published), access mode, submission count and `unpublishedChanges` |
 | `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
 | `GET` | `/v1/manage/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
 | `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |
@@ -117,6 +117,25 @@ Management changes are written to the audit log with the member (or `service`) a
 `form.published`, `form.access_changed`, `embed_token.issued` (by members only; backends issue one
 per end user), `webhook.created`, `webhook.deleted`, `webhook.redelivered`, as well as
 `submissions.revealed`, `submissions.exported` and `file.downloaded`.
+
+### Working copies (builder)
+
+A form can be created and edited before it is published. Each form has at most one working copy:
+the document being edited. Saves are checked with optimistic concurrency: the client sends the
+`revision` it edited, and a save over any other revision is rejected with `409 revisionConflict`
+(with `currentRevision`, `updatedBy`, `updatedAt`). Revisions never repeat. A working copy may be
+invalid while it is edited; its `problems` are returned with every read and save.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/v1/manage/forms` | `{ key, title }` → `201`: an unpublished form with a one-page working copy. `409 formExists`, `400 invalidKey`. Not served at runtime until published. |
+| `GET` | `/v1/manage/forms/{key}/working-copy` | `{ key, revision, baseVersion, latestVersion, document, updatedAt, updatedBy, problems }`. Without a saved copy, the latest published definition with `revision: 0`. |
+| `PUT` | `/v1/manage/forms/{key}/working-copy` | `{ revision, document }` (`revision: 0` for the first save) → the saved copy with its new revision. Documents up to 1 MB. |
+| `DELETE` | `/v1/manage/forms/{key}/working-copy` | Discard the copy; editing starts again from the published version (`409 neverPublished` for unpublished forms). |
+| `GET` | `/v1/manage/forms/{key}/working-copy/check` | `{ problems, changes }`. `changes` compare a valid copy with the published version: `fieldRemoved`, `typeChanged` (`from`, `to`) and `optionsRemoved` (`values`), by answer path (`key` or `repeater.child`). |
+| `POST` | `/v1/manage/forms/{key}/working-copy/publish` | `{ revision, acknowledgeChanges }` → `201 { key, version, publishedAt }` and the copy is removed. `422` with `errors` when invalid; `409 changesNotAcknowledged` with `changes` until they are acknowledged. |
+
+Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `working_copy.discarded`.
 
 ### Webhooks
 
