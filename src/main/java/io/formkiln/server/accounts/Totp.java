@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.OptionalLong;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -47,22 +48,32 @@ public final class Totp {
 
     /** Accepts the code of the current step and of one step on either side (clock drift). */
     public static boolean verify(byte[] secret, String code, Instant now) {
+        return matchingStep(secret, code, now).isPresent();
+    }
+
+    /**
+     * The time step the code belongs to (current step, or one on either side for clock drift).
+     * Callers record it so that a code, once accepted, cannot be used again.
+     */
+    public static OptionalLong matchingStep(byte[] secret, String code, Instant now) {
         if (code == null) {
-            return false;
+            return OptionalLong.empty();
         }
         String normalized = code.replace(" ", "");
         if (!normalized.matches("\\d{6}")) {
-            return false;
+            return OptionalLong.empty();
         }
         long counter = Math.floorDiv(now.getEpochSecond(), STEP_SECONDS);
-        boolean match = false;
+        long matched = Long.MIN_VALUE;
         for (long step = counter - 1; step <= counter + 1; step++) {
             // Compare every candidate in constant time; do not stop early.
-            match |= MessageDigest.isEqual(
+            if (MessageDigest.isEqual(
                     code(secret, step, DIGITS).getBytes(StandardCharsets.US_ASCII),
-                    normalized.getBytes(StandardCharsets.US_ASCII));
+                    normalized.getBytes(StandardCharsets.US_ASCII))) {
+                matched = step;
+            }
         }
-        return match;
+        return matched == Long.MIN_VALUE ? OptionalLong.empty() : OptionalLong.of(matched);
     }
 
     public static String base32(byte[] data) {

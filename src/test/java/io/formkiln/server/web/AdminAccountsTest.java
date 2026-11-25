@@ -170,7 +170,14 @@ class AdminAccountsTest {
         return out.toByteArray();
     }
 
+    private long lastCodeStep = Long.MIN_VALUE;
+
+    /** A fresh code: each code is accepted once, so wait for the next step as a person would. */
     private String code(byte[] secret) {
+        if (clock.instant().getEpochSecond() / 30 <= lastCodeStep) {
+            clock.advance(Duration.ofSeconds(30));
+        }
+        lastCodeStep = clock.instant().getEpochSecond() / 30;
         return Totp.code(secret, clock.instant());
     }
 
@@ -211,6 +218,33 @@ class AdminAccountsTest {
     }
 
     // ---------------------------------------------------------------- tests
+
+    @Test
+    void anAuthenticatorCodeWorksOnce() throws Exception {
+        Member admin = firstAdmin();
+        // The code that enrolled the authenticator cannot sign in.
+        String enrollment = Totp.code(admin.secret(), clock.instant());
+        assertThat(mfa("admin@example.com", "correct horse battery", enrollment).getResponse().getStatus()).isEqualTo(401);
+
+        String code = code(admin.secret());
+        assertThat(mfa("admin@example.com", "correct horse battery", code).getResponse().getStatus()).isEqualTo(200);
+        // Seen over a shoulder or through a phishing proxy, the same code is refused, even
+        // while it is still within its time window.
+        assertThat(mfa("admin@example.com", "correct horse battery", code).getResponse().getStatus()).isEqualTo(401);
+        // An earlier step (still inside the clock-drift window) is refused too.
+        String previous = Totp.code(admin.secret(), clock.instant().minusSeconds(30));
+        assertThat(mfa("admin@example.com", "correct horse battery", previous).getResponse().getStatus()).isEqualTo(401);
+        // Regenerating recovery codes uses up a code in the same way.
+        String next = code(admin.secret());
+        assertThat(status(json(post("/v1/admin/me/recovery-codes"), Map.of("code", next)), admin.cookie())).isEqualTo(200);
+        assertThat(status(json(post("/v1/admin/me/recovery-codes"), Map.of("code", next)), admin.cookie())).isEqualTo(400);
+    }
+
+    private MvcResult mfa(String email, String password, String code) throws Exception {
+        MvcResult first = call(json(post("/v1/admin/auth/login"), Map.of("email", email, "password", password)));
+        assertThat(first.getResponse().getStatus()).isEqualTo(200);
+        return call(json(post("/v1/admin/auth/mfa"), Map.of("challenge", body(first).get("challenge").asString(), "code", code)));
+    }
 
     @Test
     void bootstrapInvitesTheFirstAdminOnce() {

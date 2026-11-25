@@ -140,6 +140,20 @@ public class AccountRepository {
                 .update();
     }
 
+    /**
+     * Records an accepted TOTP step. False when this or a later step was already used: the code
+     * is a replay. Atomic, so two concurrent requests cannot both use one code.
+     */
+    public boolean useTotpStep(UUID id, long step) {
+        return jdbc.sql("""
+                        UPDATE admin_user SET totp_last_step = :step
+                        WHERE id = :id AND (totp_last_step IS NULL OR totp_last_step < :step)
+                        """)
+                .param("step", step)
+                .param("id", id)
+                .update() == 1;
+    }
+
     public void updateTotp(UUID id, byte[] totpSecret) {
         jdbc.sql("UPDATE admin_user SET totp_secret = :totp WHERE id = :id").param("totp", totpSecret).param("id", id).update();
     }
