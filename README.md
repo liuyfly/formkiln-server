@@ -34,7 +34,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_DB_USERNAME` | `formkiln` | Database user |
 | `FORMKILN_DB_PASSWORD` | `formkiln` | Database password |
 | `FORMKILN_PORT` | `8080` | HTTP port |
-| `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP). Keep it safe: losing it locks out every member. |
+| `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP, sensitive answers, drafts, webhook secrets and payloads) and signs embed tokens. Keep it safe: losing it locks out every member and makes encrypted data unreadable. |
 | `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API (acts as an editor). Disabled when empty. |
 | `FORMKILN_BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Invited as the first admin when there are no members yet |
 | `FORMKILN_ADMIN_URL` | `http://localhost:3200` | Base URL of the admin app, used in invitation and reset links |
@@ -42,9 +42,13 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_MAIL_FROM` | `Formkiln <no-reply@localhost>` | Sender of account emails |
 | `FORMKILN_COOKIE_SECURE` | `true` | `Secure` flag of the session cookie (browsers accept it on `http://localhost`) |
 | `FORMKILN_AUTH_RATE_LIMIT` | `20` | Requests per minute and client IP to the public authentication endpoints |
+| `FORMKILN_RUNTIME_RATE_LIMIT` | `60` | Requests per minute and client IP to runtime writes (submissions, drafts, uploads) |
+| `FORMKILN_MAX_FILE_SIZE` | `10MB` | Largest upload; a field's `maxFileSize` can only lower it |
+| `FORMKILN_STORAGE` | `filesystem` | `filesystem` or `s3` (see [File storage](#file-storage)) |
+| `FORMKILN_TURNSTILE_SITE_KEY` / `FORMKILN_TURNSTILE_SECRET` | _(empty)_ | Cloudflare Turnstile for public forms. Disabled when empty. |
 
-Environment variables always take precedence over `.env`. Behind a reverse proxy, set
-`SERVER_FORWARD_HEADERS_STRATEGY=native` so rate limits and the audit log see the client IP.
+Environment variables always take precedence over `.env`. Behind a reverse proxy, the server
+trusts `X-Forwarded-For` from private-network proxies (`server.forward-headers-strategy: native`).
 
 ### 3. Run
 
@@ -75,23 +79,67 @@ Release images are published to `ghcr.io/liuyfly/formkiln-server` when a `v*` ta
 Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. Validation problems (422) carry an
 `errors` array.
 
-### Runtime (public)
+### Runtime (public, or with an embed token)
+
+A form's access mode is `public` (default) or `token`. Token forms require
+`Authorization: Bearer <embed token>` on every runtime request (`401 embedTokenRequired` otherwise).
+Writes are rate-limited per client IP (`FORMKILN_RUNTIME_RATE_LIMIT`, default 60/min).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/forms/{key}` | Latest published version: `{ key, version, publishedAt, definition }` |
-| `POST` | `/v1/forms/{key}/submissions` | Body `{ "version"?, "answers", "locale"? }`. The server re-validates the answers against that version (default: latest) at the time of receipt. Returns `201 { id, version, outcome, submittedAt }`, or `422` with `[{ path, code, message?, params? }]`. Only the submission data (active, non-null values) is stored. |
+| `GET` | `/v1/forms/{key}` | Latest published version: `{ key, version, publishedAt, accessMode, captcha, definition }`. `captcha` is `{ provider, siteKey }` when human verification is required, otherwise `null`. |
+| `POST` | `/v1/forms/{key}/submissions` | Body `{ "version"?, "answers", "locale"?, "draftToken"?, "captchaToken"?, "honeypot"? }`. The server re-validates the answers against that version (default: latest) at the time of receipt. Returns `201 { id, version, outcome, submittedAt }`, or `422` with `[{ path, code, message?, params? }]`. Only the submission data (active, non-null values) is stored; `sensitive` fields are encrypted at rest. A non-empty `honeypot` is silently dropped. Public forms need a valid `captchaToken` when Turnstile is configured (`400 captchaFailed`). The draft named by `draftToken` is deleted. |
+| `POST` | `/v1/forms/{key}/drafts` | `{ answers }` → `201 { token, savedAt, expiresAt }`. Drafts are encrypted, expire after 30 days and hold at most 256 KB. |
+| `GET` / `PUT` / `DELETE` | `/v1/forms/{key}/drafts` | Read, replace (`{ answers }`) or delete the draft named by the `Formkiln-Draft: <token>` header |
+| `POST` | `/v1/forms/{key}/files` | Multipart `field`, `file` → `201 { id, name, size, contentType }`: the reference to put in the file field's answer. Checked against the field's `accept` / `fileTypes` (`415`) and `maxFileSize` and `FORMKILN_MAX_FILE_SIZE` (`413`). Files not claimed by a submission within a day are removed; a file can be claimed once. |
 
 ### Management (signed-in member, or `Authorization: Bearer $FORMKILN_SERVICE_TOKEN`)
 
-Reading requires the `viewer` role; publishing requires `editor`. The service token acts as an editor.
+Viewers can read; editors (and the service token) can also write.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms` | Forms with their latest version and submission count |
+| `GET` | `/v1/manage/forms` | Forms with their latest version, access mode and submission count |
 | `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
 | `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |
-| `GET` | `/v1/manage/forms/{key}/submissions?limit=50&before=<submittedAt>` | Submissions, newest first, paginated by submission time |
+| `GET` | `/v1/manage/forms/{key}/submissions?limit=50&before=<submittedAt>&reveal=false` | Submissions, newest first, paginated by submission time. Sensitive values are masked (`••••`); `reveal=true` (editors only) shows them and is audited. |
+| `GET` | `/v1/manage/forms/{key}/files/{id}` | Download a submitted file (audited) |
+| `PUT` | `/v1/manage/forms/{key}/access` | `{ mode: "public" \| "token" }` |
+| `POST` | `/v1/manage/embed-tokens` | `{ formKey, subject?, ttlSeconds? }` → `{ token, expiresAt }`. Call it from your backend and pass the token to the embedding page. Default lifetime 15 minutes, at most 1 hour. `subject` (for example your user id) is stored with the submission. |
+| `GET` / `POST` | `/v1/manage/forms/{key}/webhooks` | List webhooks; create one with `{ url }` (https only). The signing secret is returned once. |
+| `DELETE` | `/v1/manage/forms/{key}/webhooks/{id}` | Delete a webhook (pending deliveries are dropped) |
+| `GET` | `/v1/manage/forms/{key}/webhooks/{id}/deliveries` | Recent deliveries with status, attempts and last error |
+| `POST` | `/v1/manage/forms/{key}/webhook-deliveries/{id}/redeliver` | Queue a delivery again |
+
+### Webhooks
+
+Each submission is queued (in the same transaction) for every webhook of its form and sent as
+`POST` with a JSON body:
+
+```json
+{ "event": "submission.created",
+  "form": { "key": "contact", "version": 3 },
+  "submission": { "id": "...", "outcome": "done", "submittedAt": "...", "subject": null, "data": { } } }
+```
+
+Headers: `Formkiln-Event`, `Formkiln-Delivery` (unique id, use it to deduplicate) and
+`Formkiln-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" with the secret>`.
+Verify the signature and reject old timestamps. Any `2xx` is success; otherwise the delivery is
+retried with exponential backoff (30 s doubling, 8 attempts). Redirects are not followed, and
+private or loopback destinations are refused (for development:
+`FORMKILN_WEBHOOKS_ALLOW_HTTP=true`, `FORMKILN_WEBHOOKS_ALLOW_PRIVATE_NETWORKS=true`).
+
+### File storage
+
+Uploaded files are stored under `FORMKILN_STORAGE_PATH` (default `./data/files`) or, with
+`FORMKILN_STORAGE=s3`, in an S3-compatible bucket (`FORMKILN_S3_BUCKET`, `FORMKILN_S3_REGION`,
+`FORMKILN_S3_ENDPOINT` and `FORMKILN_S3_PATH_STYLE` for MinIO or R2, and optionally
+`FORMKILN_S3_ACCESS_KEY` / `FORMKILN_S3_SECRET_KEY`; otherwise the default AWS credentials chain).
+
+### Client IP
+
+Per-IP limits and Turnstile use the client address. Behind a reverse proxy, the server trusts
+`X-Forwarded-For` only from internal (private network) proxies.
 
 ### Admin accounts
 

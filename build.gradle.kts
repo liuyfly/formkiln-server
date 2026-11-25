@@ -29,6 +29,10 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("com.networknt:json-schema-validator:3.0.9")
     implementation("org.springframework.boot:spring-boot-starter-mail")
+    // S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, ...).
+    implementation(platform("software.amazon.awssdk:bom:2.59.9"))
+    implementation("software.amazon.awssdk:s3")
+    implementation("software.amazon.awssdk:url-connection-client")
     // Argon2id password hashing (Spring Security's Argon2PasswordEncoder).
     implementation("org.bouncycastle:bcprov-jdk18on:1.87")
     implementation("org.springframework.boot:spring-boot-starter-actuator")

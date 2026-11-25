@@ -14,13 +14,13 @@ import org.springframework.stereotype.Repository;
 public class FormRepository {
 
     /** A published, immutable form version. */
-    public record StoredVersion(UUID id, String formKey, int version, String definitionJson, Instant publishedAt) {}
+    public record StoredVersion(UUID id, UUID formId, String formKey, int version, String definitionJson, Instant publishedAt) {}
 
     /** A summary row for listings. */
-    public record FormSummary(String key, int latestVersion, Instant latestPublishedAt, long submissionCount) {}
+    public record FormSummary(String key, String accessMode, int latestVersion, Instant latestPublishedAt, long submissionCount) {}
 
     /** A stored submission. */
-    public record StoredSubmission(UUID id, int version, String dataJson, String outcome, Instant submittedAt) {}
+    public record StoredSubmission(UUID id, int version, String dataJson, String outcome, Instant submittedAt, String subject) {}
 
     private final JdbcClient jdbc;
 
@@ -52,6 +52,7 @@ public class FormRepository {
                 .param("definition", definitionJson)
                 .query((rs, n) -> new StoredVersion(
                         rs.getObject("id", UUID.class),
+                        formId,
                         key,
                         rs.getInt("version"),
                         rs.getString("definition"),
@@ -62,7 +63,7 @@ public class FormRepository {
     /** The given version, or the latest version when {@code version} is null. */
     public Optional<StoredVersion> findVersion(String key, Integer version) {
         return jdbc.sql("""
-                        SELECT v.id, v.version, v.definition::text AS definition, v.published_at
+                        SELECT v.id, v.form_id, v.version, v.definition::text AS definition, v.published_at
                         FROM form_version v JOIN form f ON f.id = v.form_id
                         WHERE f.key = :key AND (CAST(:version AS integer) IS NULL OR v.version = :version)
                         ORDER BY v.version DESC
@@ -72,6 +73,7 @@ public class FormRepository {
                 .param("version", version)
                 .query((rs, n) -> new StoredVersion(
                         rs.getObject("id", UUID.class),
+                        rs.getObject("form_id", UUID.class),
                         key,
                         rs.getInt("version"),
                         rs.getString("definition"),
@@ -81,17 +83,18 @@ public class FormRepository {
 
     public List<FormSummary> listForms() {
         return jdbc.sql("""
-                        SELECT f.key,
+                        SELECT f.key, f.access_mode,
                                MAX(v.version) AS latest_version,
                                MAX(v.published_at) AS latest_published_at,
                                (SELECT COUNT(*) FROM submission s JOIN form_version sv ON sv.id = s.form_version_id
                                 WHERE sv.form_id = f.id) AS submission_count
                         FROM form f JOIN form_version v ON v.form_id = f.id
-                        GROUP BY f.id, f.key
+                        GROUP BY f.id, f.key, f.access_mode
                         ORDER BY f.key
                         """)
                 .query((rs, n) -> new FormSummary(
                         rs.getString("key"),
+                        rs.getString("access_mode"),
                         rs.getInt("latest_version"),
                         instant(rs.getObject("latest_published_at", OffsetDateTime.class)),
                         rs.getLong("submission_count")))
@@ -100,7 +103,7 @@ public class FormRepository {
 
     public List<StoredVersion> listVersions(String key) {
         return jdbc.sql("""
-                        SELECT v.id, v.version, v.definition::text AS definition, v.published_at
+                        SELECT v.id, v.form_id, v.version, v.definition::text AS definition, v.published_at
                         FROM form_version v JOIN form f ON f.id = v.form_id
                         WHERE f.key = :key
                         ORDER BY v.version DESC
@@ -108,6 +111,7 @@ public class FormRepository {
                 .param("key", key)
                 .query((rs, n) -> new StoredVersion(
                         rs.getObject("id", UUID.class),
+                        rs.getObject("form_id", UUID.class),
                         key,
                         rs.getInt("version"),
                         rs.getString("definition"),
@@ -115,29 +119,36 @@ public class FormRepository {
                 .list();
     }
 
-    public StoredSubmission insertSubmission(StoredVersion version, String dataJson, String outcome, Instant submittedAt) {
+    public StoredSubmission insertSubmission(StoredVersion version, String dataJson, String outcome, Instant submittedAt,
+            String subject) {
         return jdbc.sql("""
-                        INSERT INTO submission (form_version_id, data, outcome, submitted_at)
-                        VALUES (:versionId, CAST(:data AS jsonb), :outcome, :submittedAt)
-                        RETURNING id, data::text AS data, outcome, submitted_at
+                        INSERT INTO submission (form_version_id, data, outcome, submitted_at, subject)
+                        VALUES (:versionId, CAST(:data AS jsonb), :outcome, :submittedAt, :subject)
+                        RETURNING id, data::text AS data, outcome, submitted_at, subject
                         """)
                 .param("versionId", version.id())
                 .param("data", dataJson)
                 .param("outcome", outcome)
                 .param("submittedAt", OffsetDateTime.ofInstant(submittedAt, ZoneOffset.UTC))
+                .param("subject", subject)
                 .query((rs, n) -> new StoredSubmission(
                         rs.getObject("id", UUID.class),
                         version.version(),
                         rs.getString("data"),
                         rs.getString("outcome"),
-                        instant(rs.getObject("submitted_at", OffsetDateTime.class))))
+                        instant(rs.getObject("submitted_at", OffsetDateTime.class)),
+                        rs.getString("subject")))
                 .single();
     }
 
     /** Newest first; {@code before} is an exclusive cursor on the submission time. */
-    public List<StoredSubmission> listSubmissions(String key, Instant before, int limit) {
+    /** A submission with the definition of its version (needed to decrypt or mask sensitive fields). */
+    public record ListedSubmission(StoredSubmission submission, String definitionJson) {}
+
+    public List<ListedSubmission> listSubmissions(String key, Instant before, int limit) {
         return jdbc.sql("""
-                        SELECT s.id, v.version, s.data::text AS data, s.outcome, s.submitted_at
+                        SELECT s.id, v.version, v.definition::text AS definition, s.data::text AS data, s.outcome,
+                               s.submitted_at, s.subject
                         FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id
                         JOIN form f ON f.id = v.form_id
@@ -148,12 +159,15 @@ public class FormRepository {
                 .param("key", key)
                 .param("before", before == null ? null : OffsetDateTime.ofInstant(before, ZoneOffset.UTC))
                 .param("limit", limit)
-                .query((rs, n) -> new StoredSubmission(
-                        rs.getObject("id", UUID.class),
-                        rs.getInt("version"),
-                        rs.getString("data"),
-                        rs.getString("outcome"),
-                        instant(rs.getObject("submitted_at", OffsetDateTime.class))))
+                .query((rs, n) -> new ListedSubmission(
+                        new StoredSubmission(
+                                rs.getObject("id", UUID.class),
+                                rs.getInt("version"),
+                                rs.getString("data"),
+                                rs.getString("outcome"),
+                                instant(rs.getObject("submitted_at", OffsetDateTime.class)),
+                                rs.getString("subject")),
+                        rs.getString("definition")))
                 .list();
     }
 }

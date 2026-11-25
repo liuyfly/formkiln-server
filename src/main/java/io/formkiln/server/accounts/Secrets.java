@@ -67,6 +67,20 @@ public class Secrets {
         }
     }
 
+    /** HMAC-SHA256 with a key derived from the encryption key for one purpose ({@code label}). */
+    public byte[] mac(String label, byte[] data) {
+        try {
+            javax.crypto.Mac derive = javax.crypto.Mac.getInstance("HmacSHA256");
+            derive.init(key);
+            byte[] derived = derive.doFinal(label.getBytes(StandardCharsets.UTF_8));
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(derived, "HmacSHA256"));
+            return mac.doFinal(data);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     public byte[] encrypt(byte[] plaintext) {
         try {
             byte[] iv = randomBytes(IV_BYTES);

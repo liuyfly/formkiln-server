@@ -38,6 +38,9 @@ services:
       FORMKILN_ADMIN_URL: ${FORMKILN_ADMIN_URL:-http://localhost:3200}
       FORMKILN_SMTP_HOST: mailpit
       FORMKILN_SMTP_PORT: "1025"
+      FORMKILN_STORAGE_PATH: /data/files
+    volumes:
+      - files:/data/files
     ports:
       - "8080:8080"
     depends_on:
@@ -46,3 +49,4 @@ services:
 
 volumes:
   postgres-data:
+  files:
