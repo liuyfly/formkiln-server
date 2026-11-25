@@ -117,6 +117,9 @@ class RetentionTest {
 
     @Test
     void purgesSubmissionsPastTheRetentionPeriod() throws Exception {
+        mvc.perform(get("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.days").doesNotExist());
         mvc.perform(put("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"days\": 0}"))
                 .andExpect(status().isBadRequest());

@@ -33,13 +33,12 @@ public class RetentionRepository {
     }
 
     public Integer retentionOf(UUID formId) {
-        return jdbc.sql("SELECT retention_days FROM form WHERE id = :id")
+        // NULL means "keep until deleted"; Optional/findFirst cannot hold null.
+        List<Integer> days = jdbc.sql("SELECT retention_days FROM form WHERE id = :id")
                 .param("id", formId)
                 .query((rs, n) -> (Integer) rs.getObject(1))
-                .list()
-                .stream()
-                .findFirst()
-                .orElse(null);
+                .list();
+        return days.isEmpty() ? null : days.getFirst();
     }
 
     public List<FormRetention> formsWithRetention() {
