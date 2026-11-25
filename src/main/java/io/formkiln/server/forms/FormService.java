@@ -146,19 +146,32 @@ public class FormService {
      */
     @Transactional
     public PublishedForm publish(String key, JsonNode document) {
-        if (!document.isObject()) {
-            throw new InvalidFormException(List.of(new DefinitionError("", FormDocumentValidator.STRUCTURE)));
+        List<DefinitionError> errors = problems(key, document);
+        if (!errors.isEmpty()) {
+            throw new InvalidFormException(errors);
+        }
+        Map<String, Object> definition = canonical(document);
+        int schemaVersion = ((Double) definition.get("schemaVersion")).intValue();
+        return view(repository.publish(key, schemaVersion, json.writeValueAsString(document)));
+    }
+
+    /**
+     * Static problems of a form document for {@code key}: JSON Schema and Form Schema §10 errors,
+     * then a key mismatch. Empty when it can be published.
+     */
+    public List<DefinitionError> problems(String key, JsonNode document) {
+        if (document == null || !document.isObject()) {
+            return List.of(new DefinitionError("", FormDocumentValidator.STRUCTURE));
         }
         Map<String, Object> definition = canonical(document);
         List<DefinitionError> errors = documentValidator.validate(document, definition);
         if (!errors.isEmpty()) {
-            throw new InvalidFormException(errors);
+            return errors;
         }
         if (!key.equals(definition.get("key"))) {
-            throw new InvalidFormException(List.of(new DefinitionError("/key", "keyMismatch")));
+            return List.of(new DefinitionError("/key", "keyMismatch"));
         }
-        int schemaVersion = ((Double) definition.get("schemaVersion")).intValue();
-        return view(repository.publish(key, schemaVersion, json.writeValueAsString(document)));
+        return List.of();
     }
 
     @Transactional(readOnly = true)
@@ -197,6 +210,7 @@ public class FormService {
     @Transactional(readOnly = true)
     public Access access(String key, String authorization) {
         PlatformRepository.FormRow form = platform.findForm(key)
+                .filter(row -> repository.findVersion(key, null).isPresent()) // Unpublished forms are not served.
                 .orElseThrow(() -> new NotFoundException("Form " + key + " is not published"));
         if ("public".equals(form.accessMode())) {
             return new Access(form.id(), form.accessMode(), null);

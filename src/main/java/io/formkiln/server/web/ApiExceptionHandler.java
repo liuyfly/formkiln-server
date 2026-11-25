@@ -5,6 +5,7 @@ import io.formkiln.server.form.AnswerValidator.FormEvaluation;
 import io.formkiln.server.forms.FormService.InvalidAnswersException;
 import io.formkiln.server.forms.FormService.InvalidFormException;
 import io.formkiln.server.forms.FormService.NotFoundException;
+import io.formkiln.server.forms.WorkingCopyService.ConflictException;
 import io.formkiln.server.platform.RuntimeException4xx;
 import io.formkiln.server.platform.WebhookService.InvalidWebhookException;
 import java.util.LinkedHashMap;
@@ -72,6 +73,9 @@ public class ApiExceptionHandler {
     ProblemDetail runtime(RuntimeException4xx e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(e.status(), e.getMessage());
         problem.setProperty("code", e.code());
+        if (e instanceof ConflictException conflict) {
+            conflict.details().forEach(problem::setProperty);
+        }
         return problem;
     }
 
