@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -55,7 +56,12 @@ public final class AnswerValidator {
     private final Map<String, Boolean> activeMemo = new HashMap<>();
     private final Map<String, Object> effectiveMemo = new HashMap<>();
     private final Map<String, Slot> calcMemo = new HashMap<>();
-    private final Set<String> inProgress = new HashSet<>();
+    /**
+     * In-progress ids per memo: activity, calculation and effective value of the same path are
+     * different computations. Sharing one set made the effective value of a field look like a
+     * cycle when its activity was needed (a rule referencing a later field).
+     */
+    private final Map<Map<String, ?>, Set<String>> inProgress = new IdentityHashMap<>();
     private final List<ValidationError> errors = new ArrayList<>();
 
     @SuppressWarnings("unchecked")
@@ -130,11 +136,12 @@ public final class AnswerValidator {
         if (memo.containsKey(id)) {
             return memo.get(id);
         }
-        if (!inProgress.add(id)) {
+        Set<String> running = inProgress.computeIfAbsent(memo, m -> new HashSet<>());
+        if (!running.add(id)) {
             return fallback; // Only reachable for invalid (cyclic) documents.
         }
         T value = compute.get();
-        inProgress.remove(id);
+        running.remove(id);
         memo.put(id, value);
         return value;
     }
