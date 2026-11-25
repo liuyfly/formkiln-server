@@ -38,6 +38,16 @@ class TotpTest {
     }
 
     @Test
+    void reportsTheStepOfTheCode() {
+        Instant now = Instant.ofEpochSecond(59);
+        long step = 59 / 30;
+        assertThat(Totp.matchingStep(RFC_SECRET, Totp.code(RFC_SECRET, now), now)).hasValue(step);
+        assertThat(Totp.matchingStep(RFC_SECRET, Totp.code(RFC_SECRET, now.minusSeconds(30)), now)).hasValue(step - 1);
+        assertThat(Totp.matchingStep(RFC_SECRET, Totp.code(RFC_SECRET, now.plusSeconds(30)), now)).hasValue(step + 1);
+        assertThat(Totp.matchingStep(RFC_SECRET, "000000", now)).isEmpty();
+    }
+
+    @Test
     void encodesBase32AndOtpauthUris() {
         assertThat(Totp.base32("foobar".getBytes(StandardCharsets.US_ASCII))).isEqualTo("MZXW6YTBOI");
         assertThat(Totp.uri("Formkiln", "ada@example.com", "foobar".getBytes(StandardCharsets.US_ASCII)))

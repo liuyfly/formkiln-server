@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -313,13 +314,15 @@ public class AccountService {
             throw invalid("totpNotStarted", "Open the invitation link again to set up the authenticator app.");
         }
         byte[] secret = secrets.decrypt(invitation.totpSecret());
-        if (!Totp.verify(secret, code, clock.instant())) {
+        OptionalLong step = Totp.matchingStep(secret, code, clock.instant());
+        if (step.isEmpty()) {
             throw invalid("invalidCode", "The code is not correct. Check the time on your device and try again.");
         }
         if (repository.findUserByEmail(invitation.email()).isPresent()) {
             throw invalidToken();
         }
         UUID userId = repository.insertUser(invitation.email(), passwords.encode(password), secrets.encrypt(secret), invitation.role());
+        repository.useTotpStep(userId, step.getAsLong()); // The enrollment code cannot sign in again.
         repository.acceptInvitation(invitation.id(), clock.instant());
         List<String> codes = newRecoveryCodes(userId);
         audit(new Actor("user", userId, ip), "invitation.accepted", invitation.email(), Map.of("role", invitation.role()));
@@ -406,9 +409,11 @@ public class AccountService {
         if (challenge.totpSecret() != null) {
             // Re-enrollment after an administrator reset: the code proves the new authenticator works.
             byte[] secret = secrets.decrypt(challenge.totpSecret());
-            ok = Totp.verify(secret, code, now);
+            OptionalLong step = Totp.matchingStep(secret, code, now);
+            ok = step.isPresent();
             if (ok) {
                 repository.updateTotp(user.id(), secrets.encrypt(secret));
+                repository.useTotpStep(user.id(), step.getAsLong());
                 newCodes = newRecoveryCodes(user.id());
                 audit(new Actor("user", user.id(), ip), "totp.enrolled", user.email(), null);
             }
@@ -419,7 +424,7 @@ public class AccountService {
                         Map.of("remaining", repository.countUnusedRecoveryCodes(user.id())));
             }
         } else {
-            ok = user.totpSecret() != null && Totp.verify(secrets.decrypt(user.totpSecret()), code, now);
+            ok = user.totpSecret() != null && useTotp(user, code, now);
         }
         if (!ok) {
             repository.incrementChallengeAttempts(hash);
@@ -536,12 +541,18 @@ public class AccountService {
     @Transactional
     public List<String> regenerateRecoveryCodes(AdminPrincipal principal, String code, String ip) {
         User user = requireUser(principal.userId());
-        if (user.totpSecret() == null || !Totp.verify(secrets.decrypt(user.totpSecret()), code, clock.instant())) {
+        if (user.totpSecret() == null || !useTotp(user, code, clock.instant())) {
             throw invalid("invalidCode", "The code is not correct.");
         }
         List<String> codes = newRecoveryCodes(user.id());
         audit(new Actor("user", user.id(), ip), "recoveryCodes.regenerated", user.email(), null);
         return codes;
+    }
+
+    /** Checks a code of the member's authenticator and uses it up: each code works once. */
+    private boolean useTotp(User user, String code, Instant now) {
+        OptionalLong step = Totp.matchingStep(secrets.decrypt(user.totpSecret()), code, now);
+        return step.isPresent() && repository.useTotpStep(user.id(), step.getAsLong());
     }
 
     // ---------------------------------------------------------------- sessions
