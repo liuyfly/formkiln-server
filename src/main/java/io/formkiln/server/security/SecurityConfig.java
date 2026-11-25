@@ -106,10 +106,13 @@ public class SecurityConfig {
                         // Streaming responses (CSV export) finish on an async dispatch of a request
                         // that was already authorized.
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
+                        // Error pages render the error of a request that was already authorized (or
+                        // rejected); denying them turned every 500 into a 401.
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/v1/forms/**").permitAll()
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
-                        .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**").hasAuthority("admin")
+                        .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**", "/v1/admin/erasure").hasAuthority("admin")
                         .requestMatchers("/v1/admin/invitations", "/v1/admin/invitations/*", "/v1/admin/invitations/*/resend")
                                 .hasAuthority("admin")
                         .requestMatchers("/v1/admin/**").hasAuthority("viewer")

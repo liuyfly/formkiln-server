@@ -19,7 +19,7 @@ public class FormRepository {
     /** A summary row for listings. */
     /** A form; {@code latestVersion} and {@code latestPublishedAt} are null until it is published. */
     public record FormSummary(String key, String accessMode, Integer latestVersion, Instant latestPublishedAt, long submissionCount,
-            boolean unpublishedChanges) {}
+            boolean unpublishedChanges, Integer retentionDays) {}
 
     /** A stored submission. */
     public record StoredSubmission(UUID id, int version, String dataJson, String outcome, Instant submittedAt, String subject) {}
@@ -85,14 +85,14 @@ public class FormRepository {
 
     public List<FormSummary> listForms() {
         return jdbc.sql("""
-                        SELECT f.key, f.access_mode,
+                        SELECT f.key, f.access_mode, f.retention_days,
                                MAX(v.version) AS latest_version,
                                MAX(v.published_at) AS latest_published_at,
                                (SELECT COUNT(*) FROM submission s JOIN form_version sv ON sv.id = s.form_version_id
                                 WHERE sv.form_id = f.id) AS submission_count,
                                EXISTS (SELECT 1 FROM form_working_copy c WHERE c.form_id = f.id) AS unpublished_changes
                         FROM form f LEFT JOIN form_version v ON v.form_id = f.id
-                        GROUP BY f.id, f.key, f.access_mode
+                        GROUP BY f.id, f.key, f.access_mode, f.retention_days
                         ORDER BY f.key
                         """)
                 .query((rs, n) -> {
@@ -103,7 +103,8 @@ public class FormRepository {
                             (Integer) rs.getObject("latest_version"),
                             published == null ? null : published.toInstant(),
                             rs.getLong("submission_count"),
-                            rs.getBoolean("unpublished_changes"));
+                            rs.getBoolean("unpublished_changes"),
+                            (Integer) rs.getObject("retention_days"));
                 })
                 .list();
     }

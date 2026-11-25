@@ -101,7 +101,7 @@ Viewers can read; editors (and the service token) can also write.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms` | Forms with their latest version (`null` until published), access mode, submission count and `unpublishedChanges` |
+| `GET` | `/v1/manage/forms` | Forms with their latest version (`null` until published), access mode, submission count, `unpublishedChanges` and `retentionDays` |
 | `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
 | `GET` | `/v1/manage/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
 | `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |
@@ -149,6 +149,16 @@ Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `wo
 - **Team notification** to up to 20 addresses on every submission, with a link to the form in the admin. With `teamIncludeAnswers` it lists the answers too.
 - **Confirmation** to the address in `confirmationEmailField` when it holds a valid email. The subject and body are plain-text templates with `{{form.title}}`, `{{submission.id}}`, `{{submission.submittedAt}}`, `{{answers}}` (label: value lines) and `{{answer.<key>}}`. Subjects are kept on one line.
 - **Sensitive fields never appear in email.** Messages are queued in the submission's transaction, encrypted at rest, sent by a background job (`FORMKILN_MAIL_POLL_INTERVAL`, default 5 s) and retried 5 times (1 minute, doubling).
+
+### Deleting data
+
+| Method | Path | Who | Description |
+| --- | --- | --- | --- |
+| `DELETE` | `/v1/manage/forms/{key}/submissions/{id}` | editors | Deletes a submission with its files, webhook deliveries and queued emails (audited as `submission.deleted`). |
+| `GET` / `PUT` | `/v1/manage/forms/{key}/retention` | viewers / editors | `{ days }`: submissions older than this (1 to 36500 days) are deleted automatically every hour (`retention.purged` in the audit log); `null` keeps them until deleted. |
+| `POST` | `/v1/admin/erasure` | admins | `{ email?, subject?, dryRun = true }`: every submission, across all forms, whose answers contain the email address (any field, repeater items included, case-insensitive) or whose embed-token subject matches. A dry run returns the matches per form; `dryRun: false` deletes them. The audit log keeps a keyed fingerprint of the identifier, not the identifier itself. |
+
+Sensitive answers are encrypted and are not searched by erasure requests; drafts are anonymous and expire after 30 days. Stored file objects are removed after the deletion is committed.
 
 ### Webhooks
 
