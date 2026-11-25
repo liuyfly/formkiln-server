@@ -3,6 +3,7 @@ package io.formkiln.server.forms;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
+import io.formkiln.server.notifications.NotificationService;
 import io.formkiln.server.platform.CaptchaVerifier;
 import io.formkiln.server.platform.DraftService;
 import io.formkiln.server.platform.EmbedTokens;
@@ -78,7 +79,7 @@ public class FormService {
 
     /** A published form as served by the runtime API. */
     public record RuntimeForm(String key, int version, Instant publishedAt, String accessMode, Captcha captcha,
-            Map<String, Object> definition) {}
+            boolean resumeByEmail, Map<String, Object> definition) {}
 
     /** Who may use the runtime API for a form (Form access mode, embed token subject). */
     public record Access(UUID formId, String accessMode, String subject) {}
@@ -108,10 +109,12 @@ public class FormService {
     private final WebhookService webhooks;
     private final SubmissionData submissionData;
     private final AccountRepository audit;
+    private final NotificationService notifications;
 
     public FormService(FormRepository repository, FormDocumentValidator documentValidator, JsonMapper json, Clock clock,
             PlatformRepository platform, EmbedTokens embedTokens, CaptchaVerifier captcha, DraftService drafts, FileService files,
-            WebhookService webhooks, SubmissionData submissionData, AccountRepository audit) {
+            WebhookService webhooks, SubmissionData submissionData, AccountRepository audit,
+            NotificationService notifications) {
         this.repository = repository;
         this.documentValidator = documentValidator;
         this.json = json;
@@ -124,6 +127,7 @@ public class FormService {
         this.webhooks = webhooks;
         this.submissionData = submissionData;
         this.audit = audit;
+        this.notifications = notifications;
     }
 
     @SuppressWarnings("unchecked")
@@ -228,7 +232,18 @@ public class FormService {
         Captcha challenge = "public".equals(access.accessMode()) && captcha.enabled()
                 ? new Captcha(captcha.provider(), captcha.siteKey())
                 : null;
-        return new RuntimeForm(form.key(), form.version(), form.publishedAt(), access.accessMode(), challenge, form.definition());
+        return new RuntimeForm(form.key(), form.version(), form.publishedAt(), access.accessMode(), challenge,
+                notifications.resumeByEmail(access.formId(), access.accessMode()), form.definition());
+    }
+
+    /** Emails a link to continue the draft later (public forms with the option enabled). */
+    @Transactional
+    public void requestResumeLink(String key, Access access, String draftToken, String email, String locale) {
+        PublishedForm form = latest(key);
+        Map<String, Object> definition = form.definition();
+        String defaultLocale = definition.get("settings") instanceof Map<?, ?> s && s.get("defaultLocale") instanceof String l ? l : "en";
+        String title = io.formkiln.server.notifications.AnswerText.text(definition.get("title"), locale == null ? defaultLocale : locale);
+        notifications.requestResumeLink(key, access.formId(), access.accessMode(), draftToken, email, title);
     }
 
     @Transactional
@@ -334,6 +349,7 @@ public class FormService {
         payload.put("form", Map.of("key", key, "version", stored.version()));
         payload.put("submission", submission);
         webhooks.enqueue(access.formId(), saved.id(), payload);
+        notifications.onSubmission(access.formId(), key, definition, saved.id(), saved.submittedAt(), data, input.locale());
 
         drafts.discardQuietly(access.formId(), input.draftToken());
         return new AcceptedSubmission(saved.id().toString(), saved.version(), saved.outcome(), saved.submittedAt());

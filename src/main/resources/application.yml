@@ -30,8 +30,12 @@ formkiln:
   encryption-key: ${FORMKILN_ENCRYPTION_KEY:}
   # Base URL of the admin app, used in invitation and password reset links.
   admin-url: ${FORMKILN_ADMIN_URL:http://localhost:3200}
+  # Public URL of the hosted fill-in site, used in "continue later" emails.
+  hosted-url: ${FORMKILN_HOSTED_URL:http://localhost:3100}
   mail:
     from: ${FORMKILN_MAIL_FROM:Formkiln <no-reply@localhost>}
+    # How often queued notification emails are sent (milliseconds).
+    poll-interval: ${FORMKILN_MAIL_POLL_INTERVAL:5000}
   # Mark the session cookie Secure (browsers still accept it on http://localhost).
   cookie-secure: ${FORMKILN_COOKIE_SECURE:true}
   # Invited as the first admin when there are no members yet.
