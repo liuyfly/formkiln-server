@@ -28,6 +28,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("com.networknt:json-schema-validator:3.0.9")
+    implementation("org.springframework.boot:spring-boot-starter-mail")
+    // Argon2id password hashing (Spring Security's Argon2PasswordEncoder).
+    implementation("org.bouncycastle:bcprov-jdk18on:1.87")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-flyway")

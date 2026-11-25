@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.accounts.AccountService.AccountException;
 import io.formkiln.server.form.AnswerValidator.FormEvaluation;
 import io.formkiln.server.forms.FormService.InvalidAnswersException;
 import io.formkiln.server.forms.FormService.InvalidFormException;
@@ -52,6 +53,13 @@ public class ApiExceptionHandler {
                 HttpStatus.UNPROCESSABLE_CONTENT, "The answers are not valid.");
         problem.setTitle("Invalid answers");
         problem.setProperty("errors", errors);
+        return problem;
+    }
+
+    @ExceptionHandler(AccountException.class)
+    ProblemDetail account(AccountException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(e.status(), e.getMessage());
+        problem.setProperty("code", e.code());
         return problem;
     }
 

@@ -1,0 +1,4 @@
+# Test-only settings, merged over application.yml.
+formkiln:
+  encryption-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+  auth-rate-limit: 1000
