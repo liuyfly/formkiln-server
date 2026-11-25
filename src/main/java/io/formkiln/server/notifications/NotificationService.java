@@ -83,11 +83,13 @@ public class NotificationService {
     private final Clock clock;
     private final String adminUrl;
     private final String hostedUrl;
+    private final io.formkiln.server.metrics.FormkilnMetrics metrics;
 
     public NotificationService(NotificationRepository repository, PlatformRepository platform, DraftService drafts, Secrets secrets,
             Mailer mailer, AccountRepository audit, JsonMapper json, Clock clock,
             @Value("${formkiln.admin-url}") String adminUrl,
-            @Value("${formkiln.hosted-url:http://localhost:3100}") String hostedUrl) {
+            @Value("${formkiln.hosted-url:http://localhost:3100}") String hostedUrl,
+            io.formkiln.server.metrics.FormkilnMetrics metrics) {
         this.repository = repository;
         this.platform = platform;
         this.drafts = drafts;
@@ -98,6 +100,7 @@ public class NotificationService {
         this.clock = clock;
         this.adminUrl = adminUrl.replaceAll("/+$", "");
         this.hostedUrl = hostedUrl.replaceAll("/+$", "");
+        this.metrics = metrics;
     }
 
     private FormRow form(String key) {
@@ -277,6 +280,7 @@ public class NotificationService {
             Outgoing message = json.readValue(secrets.decrypt(mail.payload()), Outgoing.class);
             mailer.send(new Mailer.Message(message.to(), message.subject(), message.body()));
             repository.recordResult(mail.id(), "sent", attempts, now, null, now);
+            metrics.mail(mail.kind(), "sent");
             return;
         } catch (RuntimeException e) {
             error = e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
@@ -284,6 +288,7 @@ public class NotificationService {
         boolean dead = attempts >= MAX_ATTEMPTS;
         Instant next = now.plus(FIRST_RETRY.multipliedBy(1L << Math.min(attempts - 1, 20)));
         repository.recordResult(mail.id(), dead ? "dead" : "pending", attempts, next, error.length() > 512 ? error.substring(0, 512) : error, null);
+        metrics.mail(mail.kind(), dead ? "dead" : "failed");
         log.info("Mail {} attempt {} failed: {}", mail.id(), attempts, error);
     }
 

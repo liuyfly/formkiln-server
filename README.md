@@ -36,6 +36,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_PORT` | `8080` | HTTP port |
 | `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP, sensitive answers, drafts, webhook secrets and payloads) and signs embed tokens. Keep it safe: losing it locks out every member and makes encrypted data unreadable. |
 | `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API (acts as an editor). Disabled when empty. |
+| `FORMKILN_METRICS_TOKEN` | _(empty)_ | Bearer token for Prometheus scraping at `/actuator/prometheus` (see [Operations](docs/operations.md#metrics)). Closed when empty. |
 | `FORMKILN_BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Invited as the first admin when there are no members yet |
 | `FORMKILN_ADMIN_URL` | `http://localhost:3200` | Base URL of the admin app, used in invitation and reset links |
 | `FORMKILN_HOSTED_URL` | `http://localhost:3100` | Public URL of the hosted fill-in site, used in "continue later" emails |
@@ -230,6 +231,11 @@ There is no self-registration.
 
 The public endpoints are rate-limited per IP. Problem details carry a stable `code` (`loginFailed`,
 `invalidToken`, `weakPassword`, `invalidCode`, `lastAdmin`, …).
+
+## Operations
+
+Backup and restore, upgrades, metrics, alert rules and troubleshooting:
+[docs/operations.md](docs/operations.md).
 
 ## Contributing
 

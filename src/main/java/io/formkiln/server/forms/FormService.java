@@ -3,6 +3,7 @@ package io.formkiln.server.forms;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
+import io.formkiln.server.metrics.FormkilnMetrics;
 import io.formkiln.server.notifications.NotificationService;
 import io.formkiln.server.pdf.ReceiptTokens;
 import io.formkiln.server.pdf.SubmissionPdf;
@@ -115,11 +116,13 @@ public class FormService {
     private final NotificationService notifications;
     private final ReceiptTokens receipts;
     private final SubmissionPdf pdf;
+    private final FormkilnMetrics metrics;
 
     public FormService(FormRepository repository, FormDocumentValidator documentValidator, JsonMapper json, Clock clock,
             PlatformRepository platform, EmbedTokens embedTokens, CaptchaVerifier captcha, DraftService drafts, FileService files,
             WebhookService webhooks, SubmissionData submissionData, AccountRepository audit,
-            NotificationService notifications, ReceiptTokens receipts, SubmissionPdf pdf) {
+            NotificationService notifications, ReceiptTokens receipts, SubmissionPdf pdf,
+            FormkilnMetrics metrics) {
         this.repository = repository;
         this.documentValidator = documentValidator;
         this.json = json;
@@ -135,6 +138,7 @@ public class FormService {
         this.notifications = notifications;
         this.receipts = receipts;
         this.pdf = pdf;
+        this.metrics = metrics;
     }
 
     @SuppressWarnings("unchecked")
@@ -320,10 +324,12 @@ public class FormService {
         if (input.honeypot() != null && !input.honeypot().isBlank()) {
             // Looks accepted to the bot; nothing is stored.
             log.info("Discarded a submission to {} that filled the honeypot", key);
+            metrics.submission(key, "honeypot");
             UUID fakeId = UUID.randomUUID();
             return new AcceptedSubmission(fakeId.toString(), stored.version(), null, receivedAt, receipts.issue(key, fakeId));
         }
         if ("public".equals(access.accessMode()) && captcha.enabled() && !captcha.verify(input.captchaToken(), clientIp)) {
+            metrics.submission(key, "captcha_failed");
             throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "captchaFailed", "Human verification failed. Please try again.");
         }
         Map<String, Object> definition = canonical(stored.definitionJson());
@@ -335,6 +341,8 @@ public class FormService {
 
         FormEvaluation evaluation = AnswerValidator.validate(definition, answers, receivedAt, input.locale());
         if (!evaluation.valid()) {
+            metrics.submission(key, "invalid");
+            metrics.validationErrors(key, evaluation.errors());
             throw new InvalidAnswersException(evaluation);
         }
         Map<String, Object> data = evaluation.submission();
@@ -360,6 +368,7 @@ public class FormService {
         notifications.onSubmission(access.formId(), key, definition, saved.id(), saved.submittedAt(), data, input.locale());
 
         drafts.discardQuietly(access.formId(), input.draftToken());
+        metrics.submission(key, "accepted");
         return new AcceptedSubmission(saved.id().toString(), saved.version(), saved.outcome(), saved.submittedAt(),
                 receipts.issue(key, saved.id()));
     }

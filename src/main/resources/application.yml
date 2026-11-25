@@ -26,6 +26,8 @@ spring:
 formkiln:
   # Bearer token for the management API (/v1/manage/**), acting as an editor. Disabled when empty.
   service-token: ${FORMKILN_SERVICE_TOKEN:}
+  # Bearer token for Prometheus scraping (/actuator/prometheus). The endpoint is closed when empty.
+  metrics-token: ${FORMKILN_METRICS_TOKEN:}
   # 32 random bytes, Base64 (openssl rand -base64 32). Encrypts TOTP secrets. Required.
   encryption-key: ${FORMKILN_ENCRYPTION_KEY:}
   # Base URL of the admin app, used in invitation and password reset links.
@@ -83,7 +85,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:

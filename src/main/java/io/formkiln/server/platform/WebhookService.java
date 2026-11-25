@@ -66,17 +66,20 @@ public class WebhookService {
     private final UrlGuard guard;
     private final JsonMapper json;
     private final Clock clock;
+    private final io.formkiln.server.metrics.FormkilnMetrics metrics;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
 
-    public WebhookService(PlatformRepository repository, Secrets secrets, UrlGuard guard, JsonMapper json, Clock clock) {
+    public WebhookService(PlatformRepository repository, Secrets secrets, UrlGuard guard, JsonMapper json, Clock clock,
+            io.formkiln.server.metrics.FormkilnMetrics metrics) {
         this.repository = repository;
         this.secrets = secrets;
         this.guard = guard;
         this.json = json;
         this.clock = clock;
+        this.metrics = metrics;
     }
 
     private FormRow form(String key) {
@@ -174,6 +177,7 @@ public class WebhookService {
         String error = null;
         if (endpoint == null) {
             repository.recordDeliveryResult(delivery.id(), "dead", attempts, now, null, "Endpoint deleted", null);
+            metrics.webhook("dead");
             return;
         }
         try {
@@ -196,6 +200,7 @@ public class WebhookService {
                 status = response.statusCode();
                 if (status >= 200 && status < 300) {
                     repository.recordDeliveryResult(delivery.id(), "succeeded", attempts, now, status, null, now);
+                    metrics.webhook("succeeded");
                     return;
                 }
                 error = "HTTP " + status;
@@ -209,6 +214,7 @@ public class WebhookService {
         boolean dead = attempts >= MAX_ATTEMPTS;
         Instant next = now.plus(FIRST_RETRY.multipliedBy(1L << Math.min(attempts - 1, 20)));
         repository.recordDeliveryResult(delivery.id(), dead ? "dead" : "pending", attempts, next, status, truncate(error), null);
+        metrics.webhook(dead ? "dead" : "failed");
         log.info("Webhook delivery {} attempt {} failed: {}", delivery.id(), attempts, error);
     }
 
