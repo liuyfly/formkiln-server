@@ -35,6 +35,7 @@ dependencies {
     implementation("software.amazon.awssdk:url-connection-client")
     // Argon2id password hashing (Spring Security's Argon2PasswordEncoder).
     implementation("org.bouncycastle:bcprov-jdk18on:1.87")
+    implementation("org.apache.pdfbox:pdfbox:3.0.7")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-flyway")

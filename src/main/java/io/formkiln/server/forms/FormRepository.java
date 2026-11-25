@@ -216,4 +216,28 @@ public class FormRepository {
                         rs.getString("subject")))
                 .list();
     }
+
+    /** One submission of the form with the definition of its version. */
+    public java.util.Optional<ListedSubmission> findSubmission(String key, UUID id) {
+        return jdbc.sql("""
+                        SELECT s.id, v.version, v.definition::text AS definition, s.data::text AS data, s.outcome,
+                               s.submitted_at, s.subject
+                        FROM submission s
+                        JOIN form_version v ON v.id = s.form_version_id
+                        JOIN form f ON f.id = v.form_id
+                        WHERE f.key = :key AND s.id = :id
+                        """)
+                .param("key", key)
+                .param("id", id)
+                .query((rs, n) -> new ListedSubmission(
+                        new StoredSubmission(
+                                rs.getObject("id", UUID.class),
+                                rs.getInt("version"),
+                                rs.getString("data"),
+                                rs.getString("outcome"),
+                                instant(rs.getObject("submitted_at", OffsetDateTime.class)),
+                                rs.getString("subject")),
+                        rs.getString("definition")))
+                .optional();
+    }
 }
