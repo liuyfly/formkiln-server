@@ -26,6 +26,8 @@ dependencies {
     implementation(platform(SpringBootPlugin.BOM_COORDINATES))
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-validation")
+    implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("com.networknt:json-schema-validator:3.0.9")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     implementation("org.springframework.boot:spring-boot-starter-flyway")
@@ -35,6 +37,7 @@ dependencies {
     testImplementation(platform(SpringBootPlugin.BOM_COORDINATES))
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
+    testImplementation("org.springframework.boot:spring-boot-starter-security-test")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
@@ -79,8 +82,19 @@ val extractSpec by tasks.registering(Sync::class) {
     into(specDir)
 }
 
-// -PformkilnSpecDir=../formkiln/packages/spec runs the tests against an unpublished local spec.
+// -PformkilnSpecDir=../formkiln/packages/spec builds and tests against an unpublished local spec.
 val localSpecDir = providers.gradleProperty("formkilnSpecDir").orNull?.let { file(it) }
+
+// The form JSON Schema ships inside the application for structural validation at publish time.
+tasks.processResources {
+    if (localSpecDir == null) {
+        dependsOn(extractSpec)
+    }
+    from(localSpecDir ?: specDir) {
+        include("schema/form-v1.schema.json")
+        into("formkiln-spec")
+    }
+}
 
 tasks.withType<Test> {
     useJUnitPlatform()

@@ -8,7 +8,7 @@ import org.testcontainers.utility.DockerImageName;
 
 /** Starts a throwaway PostgreSQL container for integration tests. */
 @TestConfiguration(proxyBeanMethods = false)
-class TestcontainersConfiguration {
+public class TestcontainersConfiguration {
 
     @Bean
     @ServiceConnection
