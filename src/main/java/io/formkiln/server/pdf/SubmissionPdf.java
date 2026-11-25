@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +41,8 @@ public class SubmissionPdf {
     }
 
     private static String time(Map<String, Object> definition, Instant at) {
-        ZoneId zone = ZoneOffset.UTC;
+        // A region id prints "UTC" rather than the offset "Z".
+        ZoneId zone = ZoneId.of("UTC");
         if (definition.get("settings") instanceof Map<?, ?> s && s.get("timeZone") instanceof String tz) {
             try {
                 zone = ZoneId.of(tz);
