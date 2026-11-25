@@ -72,7 +72,7 @@ The expression engine is tested against the conformance cases of the pinned
 docker compose --profile app up --build
 ```
 
-Release images are published to `ghcr.io/liuyfly/formkiln-server` when a `v*` tag is pushed.
+Images are published to `ghcr.io/liuyfly/formkiln-server`: `edge` follows `main`, and `v*` tags publish `1.2.3`, `1.2` and `latest`. To run the whole platform (server, admin, hosted), see the [self-hosting guide](https://github.com/liuyfly/formkiln/blob/main/deploy/README.md).
 
 ## HTTP API
 
