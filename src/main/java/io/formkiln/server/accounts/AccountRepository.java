@@ -101,10 +101,15 @@ public class AccountRepository {
         return jdbc.sql("SELECT * FROM admin_user ORDER BY created_at").query(AccountRepository::user).list();
     }
 
+    /**
+     * Creates an account with a membership of the default workspace. Until roles are checked per
+     * workspace, the account role and the membership role are the same, and admins are instance
+     * admins (as the V10 migration mapped them).
+     */
     public UUID insertUser(String email, String passwordHash, byte[] totpSecret, String role) {
-        return jdbc.sql("""
-                        INSERT INTO admin_user (email, password_hash, totp_secret, role)
-                        VALUES (:email, :hash, :totp, :role) RETURNING id
+        UUID id = jdbc.sql("""
+                        INSERT INTO admin_user (email, password_hash, totp_secret, role, instance_admin)
+                        VALUES (:email, :hash, :totp, :role, :role = 'admin') RETURNING id
                         """)
                 .param("email", email)
                 .param("hash", passwordHash)
@@ -112,6 +117,14 @@ public class AccountRepository {
                 .param("role", role)
                 .query(UUID.class)
                 .single();
+        jdbc.sql("""
+                        INSERT INTO workspace_member (workspace_id, user_id, role)
+                        VALUES ((SELECT id FROM workspace WHERE slug = 'default'), :id, :role)
+                        """)
+                .param("id", id)
+                .param("role", role)
+                .update();
+        return id;
     }
 
     public void recordLoginFailure(UUID id, int failedLogins, Instant lockedUntil) {
@@ -159,7 +172,13 @@ public class AccountRepository {
     }
 
     public void updateRole(UUID id, String role) {
-        jdbc.sql("UPDATE admin_user SET role = :role WHERE id = :id").param("role", role).param("id", id).update();
+        jdbc.sql("UPDATE admin_user SET role = :role, instance_admin = :role = 'admin' WHERE id = :id")
+                .param("role", role).param("id", id).update();
+        jdbc.sql("""
+                        UPDATE workspace_member SET role = :role
+                        WHERE user_id = :id AND workspace_id = (SELECT id FROM workspace WHERE slug = 'default')
+                        """)
+                .param("role", role).param("id", id).update();
     }
 
     public void updateStatus(UUID id, String status) {
@@ -183,8 +202,9 @@ public class AccountRepository {
 
     public UUID insertInvitation(String email, String role, byte[] tokenHash, UUID invitedBy, Instant expiresAt) {
         return jdbc.sql("""
-                        INSERT INTO admin_invitation (email, role, token_hash, invited_by, expires_at)
-                        VALUES (:email, :role, :hash, :by, :expires) RETURNING id
+                        INSERT INTO admin_invitation (email, role, token_hash, invited_by, expires_at, workspace_id)
+                        VALUES (:email, :role, :hash, :by, :expires, (SELECT id FROM workspace WHERE slug = 'default'))
+                        RETURNING id
                         """)
                 .param("email", email)
                 .param("role", role)

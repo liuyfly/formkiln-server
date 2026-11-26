@@ -44,15 +44,16 @@ public class FormRepository {
 
     /** Creates the form if needed and inserts the next version; returns the stored version. */
     public StoredVersion publish(String key, int schemaVersion, String definitionJson) {
-        jdbc.sql("INSERT INTO form (key) VALUES (:key) ON CONFLICT (key) DO NOTHING").param("key", key).update();
+        jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, " + WorkingCopyRepository.DEFAULT_WORKSPACE
+                        + ") ON CONFLICT (workspace_id, key) DO NOTHING").param("key", key).update();
         // Lock the form row so concurrent publishes get distinct version numbers.
         UUID formId = jdbc.sql("SELECT id FROM form WHERE key = :key FOR UPDATE")
                 .param("key", key)
                 .query(UUID.class)
                 .single();
         return jdbc.sql("""
-                        INSERT INTO form_version (form_id, version, schema_version, definition)
-                        VALUES (:formId,
+                        INSERT INTO form_version (form_id, workspace_id, version, schema_version, definition)
+                        VALUES (:formId, (SELECT workspace_id FROM form WHERE id = :formId),
                                 (SELECT COALESCE(MAX(version), 0) + 1 FROM form_version WHERE form_id = :formId),
                                 :schemaVersion, CAST(:definition AS jsonb))
                         RETURNING id, version, definition::text AS definition, published_at
@@ -179,8 +180,8 @@ public class FormRepository {
     public StoredSubmission insertSubmission(StoredVersion version, String dataJson, String outcome, Instant submittedAt,
             String subject) {
         return jdbc.sql("""
-                        INSERT INTO submission (form_version_id, data, outcome, submitted_at, subject)
-                        VALUES (:versionId, CAST(:data AS jsonb), :outcome, :submittedAt, :subject)
+                        INSERT INTO submission (form_version_id, workspace_id, data, outcome, submitted_at, subject)
+                        VALUES (:versionId, (SELECT workspace_id FROM form_version WHERE id = :versionId), CAST(:data AS jsonb), :outcome, :submittedAt, :subject)
                         RETURNING id, data::text AS data, outcome, submitted_at, subject
                         """)
                 .param("versionId", version.id())

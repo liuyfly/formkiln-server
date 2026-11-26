@@ -45,7 +45,7 @@ public class FolderService {
     public Folder create(String name) {
         String clean = cleanName(name);
         try {
-            UUID id = jdbc.sql("INSERT INTO form_folder (name) VALUES (:name) RETURNING id")
+            UUID id = jdbc.sql("INSERT INTO form_folder (name, workspace_id) VALUES (:name, " + WorkingCopyRepository.DEFAULT_WORKSPACE + ") RETURNING id")
                     .param("name", clean).query(UUID.class).single();
             return new Folder(id, clean, 0);
         } catch (DuplicateKeyException e) {
