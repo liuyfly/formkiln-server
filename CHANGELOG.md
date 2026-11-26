@@ -45,7 +45,9 @@ First release.
 - Invitation-only admin accounts: password (Argon2id) plus mandatory TOTP, recovery codes,
   password reset, session management, lockout after repeated failures. Each authenticator code
   is accepted once.
-- Roles (admin, editor, viewer) per workspace, a service token for automation, and an audit log.
+- Roles (admin, editor, viewer) per workspace, and an audit log.
+- Service tokens per workspace (editor or viewer, optional expiry, revocable), shown once and stored
+  hashed; the audit log names the token. `FORMKILN_SERVICE_TOKEN` acts in the `default` workspace.
 
 ### Operations
 

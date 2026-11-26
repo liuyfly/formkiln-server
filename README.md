@@ -35,7 +35,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_DB_PASSWORD` | `formkiln` | Database password |
 | `FORMKILN_PORT` | `8080` | HTTP port |
 | `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP, sensitive answers, drafts, webhook secrets and payloads) and signs embed tokens. Keep it safe: losing it locks out every member and makes encrypted data unreadable. |
-| `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API of the `default` workspace (acts as an editor there). Disabled when empty. |
+| `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API of the `default` workspace (acts as an editor there). Disabled when empty. Prefer workspace service tokens (created by workspace admins, revocable one by one). |
 | `FORMKILN_METRICS_TOKEN` | _(empty)_ | Bearer token for Prometheus scraping at `/actuator/prometheus` (see [Operations](docs/operations.md#metrics)). Closed when empty. |
 | `FORMKILN_BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Invited as the first admin when there are no members yet |
 | `FORMKILN_ADMIN_URL` | `http://localhost:3200` | Base URL of the admin app, used in invitation and reset links |
@@ -120,9 +120,11 @@ Writes are rate-limited per client IP (`FORMKILN_RUNTIME_RATE_LIMIT`, default 60
 | `POST` | `/v1/w/{workspace}/forms/{key}/drafts/resume-link` | `{ email, locale? }` with the `Formkiln-Draft` header → `202`: emails a link that reopens the draft (`<hosted>/f/<workspace>/<key>#draft=<token>`). Only public forms with the option enabled (`resumeByEmail` in the form response); at most 3 emails per draft and day (`429 tooManyEmails`). |
 | `POST` | `/v1/w/{workspace}/forms/{key}/files` | Multipart `field`, `file` → `201 { id, name, size, contentType }`: the reference to put in the file field's answer. Checked against the field's `accept` / `fileTypes` (`415`) and `maxFileSize` and `FORMKILN_MAX_FILE_SIZE` (`413`). Files not claimed by a submission within a day are removed; a file can be claimed once. |
 
-### Management (signed-in member, or `Authorization: Bearer $FORMKILN_SERVICE_TOKEN`)
+### Management (signed-in member, or `Authorization: Bearer <service token>`)
 
-Viewers can read; editors (and the service token, in the `default` workspace) can also write.
+Viewers can read; editors can also write. A **workspace service token** (`fk_...`) acts with its role
+(`editor` or `viewer`) in its workspace only; `FORMKILN_SERVICE_TOKEN` acts as an editor of `default`.
+Tokens never reach member administration.
 Embed and receipt tokens are only valid in the workspace that issued them.
 
 | Method | Path | Description |
@@ -261,6 +263,9 @@ invitations.
 | `PATCH` / `DELETE` | `/v1/admin/workspaces/{workspace}/members/{id}` | workspace admin, instance admin | Change `{ role }`; remove from the workspace (the account stays) |
 | `GET` | `/v1/admin/workspaces/{workspace}/invitations` | workspace admin, instance admin | Open invitations |
 | `POST` / `DELETE` | `/v1/admin/workspaces/{workspace}/invitations/{id}[/resend]` | workspace admin, instance admin | Resend (new link) or revoke |
+| `GET` | `/v1/admin/workspaces/{workspace}/service-tokens` | workspace admin | The workspace's service tokens (name, role, creator, last use, expiry, revocation); never the token itself |
+| `POST` | `/v1/admin/workspaces/{workspace}/service-tokens` | workspace admin | `{ name, role: "editor" \| "viewer", expiresInDays? }` → `201 { token, details }`. The token (`fk_...`) is shown only here; the server keeps its SHA-256 |
+| `DELETE` | `/v1/admin/workspaces/{workspace}/service-tokens/{id}` | workspace admin | Revokes the token at once |
 | `GET` | `/v1/admin/workspaces/{workspace}/audit?limit=100&before=<at>` | workspace admin, instance admin | The workspace's audit log, newest first |
 | `GET` / `POST` | `/v1/admin/instance/workspaces` | instance admin | All workspaces with member and form counts; create `{ slug, name }` |
 | `PATCH` | `/v1/admin/instance/workspaces/{slug}` | instance admin | `{ name?, archived? }` |

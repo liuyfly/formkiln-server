@@ -1,5 +1,7 @@
 package io.formkiln.server.security;
 
+import io.formkiln.server.tokens.ServiceTokenPrincipal;
+import io.formkiln.server.tokens.ServiceTokenService;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.AccountService;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
@@ -58,9 +60,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *       does not reveal that a workspace or form exists.
  *   <li>Instance admins manage workspaces and accounts ({@code /v1/admin/instance/**}) and the
  *       members and audit log of any workspace, but read form data only as members.
- *   <li>The service token ({@code FORMKILN_SERVICE_TOKEN}) acts as an editor of the
- *       {@code default} workspace on the management API only, and never on member
- *       administration.
+ *   <li>Workspace service tokens ({@code fk_...}) act with their role (editor or viewer) in their
+ *       workspace, on the management API only. The environment token
+ *       ({@code FORMKILN_SERVICE_TOKEN}) acts as an editor of the {@code default} workspace.
+ *       Neither reaches member administration.
  *   <li>Unsafe {@code /v1/admin/**} requests, and unsafe requests that carry the session cookie,
  *       must send {@code X-Requested-With: formkiln}: a cross-site page cannot set it without a
  *       CORS preflight, which this server never allows (CSRF defence in addition to the
@@ -108,6 +111,7 @@ public class SecurityConfig {
             AccountService accounts,
             WorkspaceRepository workspaces,
             AccountRepository audit,
+            ServiceTokenService serviceTokens,
             Clock clock,
             @Value("${formkiln.service-token:}") String serviceToken,
             @Value("${formkiln.metrics-token:}") String metricsToken,
@@ -126,7 +130,7 @@ public class SecurityConfig {
                         "Too many attempts. Try again later."), BasicAuthenticationFilter.class)
                 .addFilterBefore(new RateLimitFilter(runtimeRateLimit, Duration.ofMinutes(1), Clock.systemUTC(), RateLimitFilter::isRuntimeWrite,
                         "Too many requests. Try again later."), BasicAuthenticationFilter.class)
-                .addFilterBefore(new ServiceTokenFilter(serviceToken, metricsToken), BasicAuthenticationFilter.class)
+                .addFilterBefore(new ServiceTokenFilter(serviceToken, metricsToken, serviceTokens), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
                 .addFilterBefore(new WorkspaceFilter(workspaces, audit, clock), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
@@ -142,7 +146,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
                         .requestMatchers("/v1/admin/instance/**").hasAuthority(INSTANCE_ADMIN)
                         .requestMatchers("/v1/admin/workspaces/*/members/**", "/v1/admin/workspaces/*/invitations/**",
-                                "/v1/admin/workspaces/*/audit", "/v1/admin/workspaces/*/erasure").hasAuthority("admin")
+                                "/v1/admin/workspaces/*/audit", "/v1/admin/workspaces/*/erasure",
+                                "/v1/admin/workspaces/*/service-tokens/**").hasAuthority("admin")
                         .requestMatchers(HttpMethod.PATCH, "/v1/admin/workspaces/*").hasAuthority("admin")
                         .requestMatchers(HttpMethod.GET, "/v1/admin/workspaces/*").hasAuthority("viewer")
                         .requestMatchers("/v1/admin/workspaces/**").denyAll()
@@ -246,15 +251,20 @@ public class SecurityConfig {
         }
     }
 
-    /** Authenticates requests that carry the service token or the metrics token. */
+    /**
+     * Authenticates requests that carry a workspace service token ({@code fk_...}), the
+     * environment service token or the metrics token.
+     */
     static final class ServiceTokenFilter extends OncePerRequestFilter {
 
         private final byte[] serviceToken;
         private final byte[] metricsToken;
+        private final ServiceTokenService serviceTokens;
 
-        ServiceTokenFilter(String serviceToken, String metricsToken) {
+        ServiceTokenFilter(String serviceToken, String metricsToken, ServiceTokenService serviceTokens) {
             this.serviceToken = bytes(serviceToken);
             this.metricsToken = bytes(metricsToken);
+            this.serviceTokens = serviceTokens;
         }
 
         private static byte[] bytes(String token) {
@@ -269,7 +279,11 @@ public class SecurityConfig {
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
                 throws ServletException, IOException {
             String header = request.getHeader("Authorization");
-            if (header != null && header.startsWith("Bearer ")) {
+            if (header != null && header.startsWith("Bearer " + ServiceTokenService.PREFIX)) {
+                serviceTokens.authenticate(header.substring("Bearer ".length())).ifPresent(token ->
+                        SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(
+                                token, null, List.of(new SimpleGrantedAuthority(SERVICE)))));
+            } else if (header != null && header.startsWith("Bearer ")) {
                 byte[] presented = header.substring("Bearer ".length()).getBytes(StandardCharsets.UTF_8);
                 String authority = matches(presented, serviceToken) ? SERVICE : matches(presented, metricsToken) ? METRICS : null;
                 if (authority != null) {
@@ -424,6 +438,10 @@ public class SecurityConfig {
                 boolean open = "manage/workspaces".equals(kind)
                         && workspaces.activeAccess(workspace.id(), principal.userId(), clock.instant()).isPresent();
                 return open ? new Access("viewer", true) : null;
+            }
+            if (auth.getPrincipal() instanceof ServiceTokenPrincipal token) {
+                return "manage/workspaces".equals(kind) && token.workspaceId().equals(workspace.id())
+                        ? new Access(token.role(), false) : null;
             }
             boolean service = auth.getAuthorities().stream().anyMatch(a -> SERVICE.equals(a.getAuthority()));
             return service && "manage/workspaces".equals(kind) && SERVICE_WORKSPACE.equals(workspace.slug())

@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.tokens.ServiceTokenPrincipal;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.retention.RetentionService.Actor;
 import io.formkiln.server.retention.RetentionService.ErasureResult;
@@ -38,7 +39,7 @@ public class RetentionApi {
         if (auth != null && auth.getPrincipal() instanceof AdminPrincipal principal) {
             return new Actor("user", principal.userId(), request.getRemoteAddr());
         }
-        return new Actor("service", null, request.getRemoteAddr());
+        return new Actor("service", ServiceTokenPrincipal.currentId(), request.getRemoteAddr());
     }
 
     /** Deletes a submission with its files (editors; audited). */

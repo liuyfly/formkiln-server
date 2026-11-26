@@ -94,6 +94,7 @@ class WorkspaceIsolationTest {
         jdbc.sql("DELETE FROM admin_invitation WHERE workspace_id IN (SELECT id FROM workspace WHERE slug <> 'default')").update();
         jdbc.sql("DELETE FROM workspace_member WHERE workspace_id IN (SELECT id FROM workspace WHERE slug <> 'default')").update();
         jdbc.sql("DELETE FROM workspace_access").update();
+        jdbc.sql("DELETE FROM service_token").update();
         jdbc.sql("DELETE FROM workspace WHERE slug <> 'default'").update();
         jdbc.sql("INSERT INTO workspace (slug, name) VALUES ('hr', 'HR')").update();
         defaultEditor = TestMembers.member(jdbc, "default", "editor");

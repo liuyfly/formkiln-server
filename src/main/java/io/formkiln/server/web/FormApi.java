@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.tokens.ServiceTokenPrincipal;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.expression.Values;
@@ -131,7 +132,7 @@ public class FormApi {
         if (auth != null && auth.getPrincipal() instanceof AdminPrincipal principal) {
             return new Object[] {"user", principal.userId()};
         }
-        return new Object[] {"service", null};
+        return new Object[] {"service", ServiceTokenPrincipal.currentId()};
     }
 
     /** Records a management change in the audit log, attributed to the member or the service token. */
@@ -347,7 +348,7 @@ public class FormApi {
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(defaultValue = "false") boolean reveal,
             HttpServletRequest request) {
-        if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
+        if (reveal && !hasAuthority("editor")) {
             throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
         }
         Object[] actor = actor();
@@ -362,7 +363,7 @@ public class FormApi {
     @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions/export")
     public ResponseEntity<StreamingResponseBody> export(
             @PathVariable String key, @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
-        if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
+        if (reveal && !hasAuthority("editor")) {
             throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
         }
         Object[] actor = actor();
@@ -379,7 +380,7 @@ public class FormApi {
     @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions/{id}/pdf")
     public ResponseEntity<byte[]> submissionPdf(@PathVariable String key, @PathVariable UUID id,
             @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
-        if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
+        if (reveal && !hasAuthority("editor")) {
             throw new RuntimeException4xx(HttpStatus.FORBIDDEN, "revealForbidden", "Only editors can reveal sensitive values.");
         }
         Object[] actor = actor();
