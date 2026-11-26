@@ -1,5 +1,6 @@
 package io.formkiln.server.retention;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.Secrets;
 import io.formkiln.server.forms.FormService.NotFoundException;
@@ -153,7 +154,8 @@ public class RetentionService {
                 }
             }
             if (purged > 0) {
-                record(new Actor("system", null, null), "retention.purged", form.key(), Map.of("deleted", purged, "days", form.days()));
+                audit.auditIn(form.workspaceId(), "system", null, "retention.purged", form.key(), null,
+                        json.writeValueAsString(Map.of("deleted", purged, "days", form.days())));
                 log.info("Deleted {} submissions of {} older than {} days", purged, form.key(), form.days());
             }
         }
@@ -186,10 +188,10 @@ public class RetentionService {
         }
         List<Match> matches = new ArrayList<>();
         if (address != null) {
-            matches.addAll(repository.byEmail(address));
+            matches.addAll(repository.byEmail(WorkspaceContext.id(), address));
         }
         if (who != null) {
-            matches.addAll(repository.bySubject(who));
+            matches.addAll(repository.bySubject(WorkspaceContext.id(), who));
         }
         Map<String, Integer> forms = new LinkedHashMap<>();
         LinkedHashSet<UUID> ids = new LinkedHashSet<>();

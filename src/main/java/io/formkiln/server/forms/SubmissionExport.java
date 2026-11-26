@@ -1,5 +1,6 @@
 package io.formkiln.server.forms;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
@@ -39,7 +40,8 @@ public class SubmissionExport {
     private static final List<String> META = List.of("id", "version", "outcome", "submittedAt", "subject");
 
     /** A prepared export: the form exists and the access is audited; {@link #write} streams it. */
-    public record Prepared(String key, boolean reveal) {}
+    /** The export to write; the workspace is captured because the body is written outside the request. */
+    public record Prepared(UUID workspace, String key, boolean reveal) {}
 
     private final FormRepository repository;
     private final SubmissionData submissionData;
@@ -58,7 +60,7 @@ public class SubmissionExport {
             throw new NotFoundException("Form " + key + " is not published");
         }
         audit.audit(actorType, actorId, "submissions.exported", key, ip, "{\"reveal\":" + reveal + "}");
-        return new Prepared(key, reveal);
+        return new Prepared(WorkspaceContext.id(), key, reveal);
     }
 
     @SuppressWarnings("unchecked")
@@ -71,7 +73,7 @@ public class SubmissionExport {
         List<Column> columns = new ArrayList<>();
         Map<String, Column> byId = new HashMap<>();
         Map<String, Column> byKey = new HashMap<>();
-        for (StoredVersion version : repository.listVersions(export.key())) { // Newest first.
+        for (StoredVersion version : repository.listVersions(export.workspace(), export.key())) { // Newest first.
             FieldIndex index = FieldIndex.of(canonical(version.definitionJson()));
             indexes.put(version.version(), index);
             for (String key : index.answerKeys()) {
@@ -107,7 +109,7 @@ public class SubmissionExport {
         Instant afterAt = null;
         UUID afterId = null;
         while (true) {
-            List<StoredSubmission> page = repository.exportPage(export.key(), afterAt, afterId, PAGE);
+            List<StoredSubmission> page = repository.exportPage(export.workspace(), export.key(), afterAt, afterId, PAGE);
             for (StoredSubmission s : page) {
                 FieldIndex index = indexes.get(s.version());
                 Map<String, Object> stored = canonical(s.dataJson());

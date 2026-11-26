@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.TestMembers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -66,14 +67,14 @@ class RetentionTest {
         jdbc.sql("TRUNCATE mail_outbox, form_notification_settings, webhook_delivery, webhook_endpoint, file_object, form_draft,"
                 + " submission, form_version, form, audit_log CASCADE").update();
         for (String key : new String[] {"alpha", "beta"}) {
-            mvc.perform(post("/v1/manage/forms/" + key + "/versions").header("Authorization", TOKEN)
+            mvc.perform(post("/v1/manage/workspaces/default/forms/" + key + "/versions").header("Authorization", TOKEN)
                             .contentType(MediaType.APPLICATION_JSON).content(form(key)))
                     .andExpect(status().isCreated());
         }
     }
 
     private String submit(String formKey, String answers) throws Exception {
-        String body = mvc.perform(post("/v1/forms/" + formKey + "/submissions").contentType(MediaType.APPLICATION_JSON)
+        String body = mvc.perform(post("/v1/w/default/forms/" + formKey + "/submissions").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": " + answers + "}"))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
@@ -86,11 +87,11 @@ class RetentionTest {
 
     @Test
     void deletesASubmissionWithItsFilesDeliveriesAndEmails() throws Exception {
-        mvc.perform(post("/v1/manage/forms/alpha/webhooks").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/alpha/webhooks").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"url\": \"https://example.com/hook\"}"));
-        mvc.perform(put("/v1/manage/forms/alpha/notifications").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/alpha/notifications").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"teamRecipients\": [\"ops@example.com\"]}"));
-        String upload = mvc.perform(multipart("/v1/forms/alpha/files")
+        String upload = mvc.perform(multipart("/v1/w/default/forms/alpha/files")
                         .file(new MockMultipartFile("file", "a.txt", "text/plain", "hello".getBytes(StandardCharsets.UTF_8)))
                         .param("field", "doc"))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
@@ -101,10 +102,10 @@ class RetentionTest {
         assertThat(count("webhook_delivery")).isEqualTo(2);
         assertThat(count("mail_outbox")).isEqualTo(2);
 
-        mvc.perform(delete("/v1/manage/forms/beta/submissions/" + id).header("Authorization", TOKEN)).andExpect(status().isNotFound());
-        mvc.perform(delete("/v1/manage/forms/alpha/submissions/" + id).with(user("v").authorities(() -> "viewer")))
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/beta/submissions/" + id).header("Authorization", TOKEN)).andExpect(status().isNotFound());
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/alpha/submissions/" + id).with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isForbidden());
-        mvc.perform(delete("/v1/manage/forms/alpha/submissions/" + id).header("Authorization", TOKEN)).andExpect(status().isNoContent());
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/alpha/submissions/" + id).header("Authorization", TOKEN)).andExpect(status().isNoContent());
 
         assertThat(jdbc.sql("SELECT id::text FROM submission").query(String.class).list()).containsExactly(other);
         assertThat(count("file_object")).isZero();
@@ -117,17 +118,17 @@ class RetentionTest {
 
     @Test
     void purgesSubmissionsPastTheRetentionPeriod() throws Exception {
-        mvc.perform(get("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/alpha/retention").header("Authorization", TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.days").doesNotExist());
-        mvc.perform(put("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/alpha/retention").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"days\": 0}"))
                 .andExpect(status().isBadRequest());
-        mvc.perform(put("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/alpha/retention").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"days\": 30}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.days").value(30));
-        mvc.perform(get("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN)).andExpect(jsonPath("$.days").value(30));
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/alpha/retention").header("Authorization", TOKEN)).andExpect(jsonPath("$.days").value(30));
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[?(@.key == 'alpha')].retentionDays").value(30));
 
         String old = submit("alpha", "{\"name\": \"Old\"}");
@@ -143,13 +144,13 @@ class RetentionTest {
                         .query(String.class).single())
                 .isEqualTo("system alpha {\"days\": 30, \"deleted\": 1}");
 
-        mvc.perform(put("/v1/manage/forms/alpha/retention").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/alpha/retention").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"days\": null}"))
                 .andExpect(jsonPath("$.days").doesNotExist());
     }
 
     private ResultActions erase(String body) throws Exception {
-        return mvc.perform(post("/v1/admin/erasure").with(user("a").authorities(() -> "admin"))
+        return mvc.perform(post("/v1/admin/workspaces/default/erasure").with(TestMembers.member(jdbc, "admin"))
                 .header("X-Requested-With", "formkiln").contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
@@ -173,22 +174,23 @@ class RetentionTest {
         assertThat(details).contains("\"deleted\": 2").doesNotContain("ada@").doesNotContain("example.com");
 
         erase("{}").andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("identifierRequired"));
-        mvc.perform(post("/v1/admin/erasure").with(user("e").authorities(() -> "editor")).header("X-Requested-With", "formkiln")
+        mvc.perform(post("/v1/admin/workspaces/default/erasure").with(TestMembers.member(jdbc, "editor")).header("X-Requested-With", "formkiln")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"email\": \"x@example.com\"}"))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/v1/admin/erasure").header("Authorization", TOKEN).header("X-Requested-With", "formkiln")
+        // The service token never reaches member administration: not even the workspace is revealed.
+        mvc.perform(post("/v1/admin/workspaces/default/erasure").header("Authorization", TOKEN).header("X-Requested-With", "formkiln")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"email\": \"x@example.com\"}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     @Test
     void erasesBySubject() throws Exception {
-        mvc.perform(put("/v1/manage/forms/alpha/access").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/alpha/access").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"mode\": \"token\"}"));
-        String token = (String) json.readValue(mvc.perform(post("/v1/manage/embed-tokens").header("Authorization", TOKEN)
+        String token = (String) json.readValue(mvc.perform(post("/v1/manage/workspaces/default/embed-tokens").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"formKey\": \"alpha\", \"subject\": \"user-7\"}"))
                 .andReturn().getResponse().getContentAsString(), Map.class).get("token");
-        mvc.perform(post("/v1/forms/alpha/submissions").header("Authorization", "Bearer " + token)
+        mvc.perform(post("/v1/w/default/forms/alpha/submissions").header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"answers\": {\"name\": \"Ada\"}}"))
                 .andExpect(status().isCreated());
         erase("{\"subject\": \"user-7\", \"dryRun\": false}").andExpect(jsonPath("$.total").value(1));

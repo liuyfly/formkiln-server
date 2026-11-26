@@ -200,8 +200,9 @@ class AdminAccountsTest {
     }
 
     private Member invite(Member admin, String email, String role) throws Exception {
-        MvcResult result = call(json(post("/v1/admin/invitations"), Map.of("email", email, "role", role)).cookie(admin.cookie()));
+        MvcResult result = call(json(post("/v1/admin/workspaces/default/members"), Map.of("email", email, "role", role)).cookie(admin.cookie()));
         assertThat(result.getResponse().getStatus()).isEqualTo(201);
+        assertThat(body(result).get("result").asString()).isEqualTo("invited");
         return accept(email, "another long password");
     }
 
@@ -294,7 +295,10 @@ class AdminAccountsTest {
     @Test
     void signsInWithPasswordAndTotpAndSignsOut() throws Exception {
         Member admin = firstAdmin();
-        assertThat(body(call(get("/v1/admin/auth/me").cookie(admin.cookie()))).get("role").asString()).isEqualTo("admin");
+        JsonNode me = body(call(get("/v1/admin/auth/me").cookie(admin.cookie())));
+        assertThat(me.get("instanceAdmin").asBoolean()).isTrue();
+        assertThat(me.get("workspaces").get(0).get("slug").asString()).isEqualTo("default");
+        assertThat(me.get("workspaces").get(0).get("role").asString()).isEqualTo("admin");
         assertThat(status(get("/v1/admin/auth/me"), null)).isEqualTo(401);
 
         MvcResult wrong = login("admin@example.com", "wrong password!!", admin.secret());
@@ -368,23 +372,23 @@ class AdminAccountsTest {
                  "pages": [{"key": "p", "elements": [{"type": "text", "key": "name", "label": "Name"}]}]}
                 """;
         // Request builders are mutable, so build a fresh one per request.
-        java.util.function.Supplier<MockHttpServletRequestBuilder> publish = () -> post("/v1/manage/forms/contact/versions")
+        java.util.function.Supplier<MockHttpServletRequestBuilder> publish = () -> post("/v1/manage/workspaces/default/forms/contact/versions")
                 .contentType(MediaType.APPLICATION_JSON).header("X-Requested-With", "formkiln").content(form);
 
-        assertThat(status(get("/v1/manage/forms"), viewer.cookie())).isEqualTo(200);
+        assertThat(status(get("/v1/manage/workspaces/default/forms"), viewer.cookie())).isEqualTo(200);
         assertThat(status(publish.get(), viewer.cookie())).isEqualTo(403);
         assertThat(status(publish.get(), editor.cookie())).isEqualTo(201);
         // Cookie-authenticated writes outside /v1/admin also need the CSRF header ...
-        assertThat(status(post("/v1/manage/forms/contact/versions").contentType(MediaType.APPLICATION_JSON).content(form),
+        assertThat(status(post("/v1/manage/workspaces/default/forms/contact/versions").contentType(MediaType.APPLICATION_JSON).content(form),
                 editor.cookie())).isEqualTo(403);
         // ... while service-token automation does not.
-        assertThat(call(post("/v1/manage/forms/contact/versions").contentType(MediaType.APPLICATION_JSON).content(form)
+        assertThat(call(post("/v1/manage/workspaces/default/forms/contact/versions").contentType(MediaType.APPLICATION_JSON).content(form)
                 .header("Authorization", "Bearer test-token")).getResponse().getStatus()).isEqualTo(201);
-        assertThat(status(get("/v1/admin/members"), editor.cookie())).isEqualTo(403);
-        assertThat(status(get("/v1/admin/members"), admin.cookie())).isEqualTo(200);
-        assertThat(call(get("/v1/admin/members").header("Authorization", "Bearer test-token")).getResponse().getStatus())
-                .isIn(401, 403);
-        assertThat(call(get("/v1/manage/forms").header("Authorization", "Bearer test-token")).getResponse().getStatus())
+        assertThat(status(get("/v1/admin/workspaces/default/members"), editor.cookie())).isEqualTo(403);
+        assertThat(status(get("/v1/admin/workspaces/default/members"), admin.cookie())).isEqualTo(200);
+        assertThat(call(get("/v1/admin/workspaces/default/members").header("Authorization", "Bearer test-token")).getResponse().getStatus())
+                .isEqualTo(404);
+        assertThat(call(get("/v1/manage/workspaces/default/forms").header("Authorization", "Bearer test-token")).getResponse().getStatus())
                 .isEqualTo(200);
     }
 
@@ -392,11 +396,15 @@ class AdminAccountsTest {
     void protectsTheLastActiveAdmin() throws Exception {
         Member admin = firstAdmin();
         String id = body(call(get("/v1/admin/auth/me").cookie(admin.cookie()))).get("id").asString();
-        MvcResult demote = call(json(patch("/v1/admin/members/" + id), Map.of("role", "editor")).cookie(admin.cookie()));
+        MvcResult demote = call(json(patch("/v1/admin/workspaces/default/members/" + id), Map.of("role", "editor")).cookie(admin.cookie()));
         assertThat(demote.getResponse().getStatus()).isEqualTo(409);
         assertThat(body(demote).get("code").asString()).isEqualTo("lastAdmin");
-        MvcResult disable = call(json(patch("/v1/admin/members/" + id), Map.of("status", "disabled")).cookie(admin.cookie()));
+        MvcResult remove = call(json(delete("/v1/admin/workspaces/default/members/" + id), Map.of()).cookie(admin.cookie()));
+        assertThat(remove.getResponse().getStatus()).isEqualTo(409);
+        MvcResult disable = call(json(patch("/v1/admin/instance/accounts/" + id), Map.of("status", "disabled")).cookie(admin.cookie()));
         assertThat(disable.getResponse().getStatus()).isEqualTo(409);
+        MvcResult revoke = call(json(patch("/v1/admin/instance/accounts/" + id), Map.of("instanceAdmin", false)).cookie(admin.cookie()));
+        assertThat(revoke.getResponse().getStatus()).isEqualTo(409);
     }
 
     @Test
@@ -404,7 +412,7 @@ class AdminAccountsTest {
         Member admin = firstAdmin();
         Member editor = invite(admin, "editor@example.com", "editor");
         String id = body(call(get("/v1/admin/auth/me").cookie(editor.cookie()))).get("id").asString();
-        MvcResult result = call(json(patch("/v1/admin/members/" + id), Map.of("status", "disabled")).cookie(admin.cookie()));
+        MvcResult result = call(json(patch("/v1/admin/instance/accounts/" + id), Map.of("status", "disabled")).cookie(admin.cookie()));
         assertThat(body(result).get("status").asString()).isEqualTo("disabled");
         assertThat(status(get("/v1/admin/auth/me"), editor.cookie())).isEqualTo(401);
         assertThat(login("editor@example.com", "another long password", editor.secret()).getResponse().getStatus()).isEqualTo(401);
@@ -413,21 +421,21 @@ class AdminAccountsTest {
     @Test
     void invitationsCanBeListedResentAndRevoked() throws Exception {
         Member admin = firstAdmin();
-        MvcResult created = call(json(post("/v1/admin/invitations"), Map.of("email", "New@Example.com", "role", "viewer")).cookie(admin.cookie()));
-        String id = body(created).get("id").asString();
+        MvcResult created = call(json(post("/v1/admin/workspaces/default/members"), Map.of("email", "New@Example.com", "role", "viewer")).cookie(admin.cookie()));
+        String id = body(created).get("invitation").get("id").asString();
         String firstToken = mailer.lastToken("new@example.com");
 
-        String resentId = body(call(json(post("/v1/admin/invitations/" + id + "/resend"), Map.of()).cookie(admin.cookie()))).get("id").asString();
+        String resentId = body(call(json(post("/v1/admin/workspaces/default/invitations/" + id + "/resend"), Map.of()).cookie(admin.cookie()))).get("id").asString();
         assertThat(mailer.lastToken("new@example.com")).isNotEqualTo(firstToken);
         assertThat(body(call(json(post("/v1/admin/invitations/inspect"), Map.of("token", firstToken)))).get("code").asString())
                 .isEqualTo("invalidToken");
 
-        JsonNode open = body(call(get("/v1/admin/invitations").cookie(admin.cookie())));
+        JsonNode open = body(call(get("/v1/admin/workspaces/default/invitations").cookie(admin.cookie())));
         assertThat(open).hasSize(1);
-        assertThat(status(json(delete("/v1/admin/invitations/" + resentId), Map.of()), admin.cookie())).isEqualTo(204);
-        assertThat(body(call(get("/v1/admin/invitations").cookie(admin.cookie())))).isEmpty();
+        assertThat(status(json(delete("/v1/admin/workspaces/default/invitations/" + resentId), Map.of()), admin.cookie())).isEqualTo(204);
+        assertThat(body(call(get("/v1/admin/workspaces/default/invitations").cookie(admin.cookie())))).isEmpty();
 
-        MvcResult existing = call(json(post("/v1/admin/invitations"), Map.of("email", "admin@example.com", "role", "viewer")).cookie(admin.cookie()));
+        MvcResult existing = call(json(post("/v1/admin/workspaces/default/members"), Map.of("email", "admin@example.com", "role", "viewer")).cookie(admin.cookie()));
         assertThat(body(existing).get("code").asString()).isEqualTo("memberExists");
     }
 
@@ -436,7 +444,7 @@ class AdminAccountsTest {
         Member admin = firstAdmin();
         Member editor = invite(admin, "editor@example.com", "editor");
         String id = body(call(get("/v1/admin/auth/me").cookie(editor.cookie()))).get("id").asString();
-        assertThat(status(json(post("/v1/admin/members/" + id + "/reset-totp"), Map.of()), admin.cookie())).isEqualTo(204);
+        assertThat(status(json(post("/v1/admin/instance/accounts/" + id + "/reset-totp"), Map.of()), admin.cookie())).isEqualTo(204);
         assertThat(status(get("/v1/admin/auth/me"), editor.cookie())).isEqualTo(401);
 
         MvcResult first = call(json(post("/v1/admin/auth/login"), Map.of("email", "editor@example.com", "password", "another long password")));
@@ -491,7 +499,12 @@ class AdminAccountsTest {
     void recordsAnAuditTrail() throws Exception {
         Member admin = firstAdmin();
         login("admin@example.com", "wrong password!!", admin.secret());
-        JsonNode audit = body(call(get("/v1/admin/audit").cookie(admin.cookie())));
+        // Membership events are in the workspace's log; sign-ins only in the instance log.
+        JsonNode workspace = body(call(get("/v1/admin/workspaces/default/audit").cookie(admin.cookie())));
+        List<String> workspaceActions = new ArrayList<>();
+        workspace.forEach(entry -> workspaceActions.add(entry.get("action").asString()));
+        assertThat(workspaceActions).contains("invitation.created", "invitation.accepted").doesNotContain("login.failed");
+        JsonNode audit = body(call(get("/v1/admin/instance/audit").cookie(admin.cookie())));
         List<String> actions = new ArrayList<>();
         audit.forEach(entry -> actions.add(entry.get("action").asString()));
         assertThat(actions).contains("invitation.created", "invitation.accepted", "login.failed");

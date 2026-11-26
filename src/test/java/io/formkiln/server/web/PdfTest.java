@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.TestMembers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -52,11 +53,11 @@ class PdfTest {
     void setUp() throws Exception {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         jdbc.sql("TRUNCATE submission, form_version, form, audit_log CASCADE").update();
-        mvc.perform(post("/v1/manage/forms/order/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/order/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(FORM)).andExpect(status().isCreated());
-        mvc.perform(post("/v1/manage/forms/other/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/other/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(FORM.replace("\"order\"", "\"other\""))).andExpect(status().isCreated());
-        String body = mvc.perform(post("/v1/forms/order/submissions").contentType(MediaType.APPLICATION_JSON).content("""
+        String body = mvc.perform(post("/v1/w/default/forms/order/submissions").contentType(MediaType.APPLICATION_JSON).content("""
                         {"answers": {"name": "Ada", "plan": "pro", "card": "4111-1111", "items": [{"sku": "A-1", "qty": 2}, {"sku": "B-7", "qty": 1}]}}
                         """))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
@@ -64,7 +65,7 @@ class PdfTest {
     }
 
     private byte[] adminPdf(String query, boolean expectOk) throws Exception {
-        var result = mvc.perform(get("/v1/manage/forms/order/submissions/" + accepted.get("id") + "/pdf" + query).header("Authorization", TOKEN));
+        var result = mvc.perform(get("/v1/manage/workspaces/default/forms/order/submissions/" + accepted.get("id") + "/pdf" + query).header("Authorization", TOKEN));
         if (!expectOk) {
             return null;
         }
@@ -82,10 +83,10 @@ class PdfTest {
                 .doesNotContain("4111").contains("Items").contains("#1").contains("A-1").contains("#2").contains("B-7")
                 .contains("Quantity");
         assertThat(PdfWriterTest.text(adminPdf("?reveal=true", true))).contains("4111-1111");
-        mvc.perform(get("/v1/manage/forms/order/submissions/" + accepted.get("id") + "/pdf?reveal=true")
-                        .with(user("v").authorities(() -> "viewer")))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/order/submissions/" + accepted.get("id") + "/pdf?reveal=true")
+                        .with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isForbidden());
-        mvc.perform(get("/v1/manage/forms/other/submissions/" + accepted.get("id") + "/pdf").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/other/submissions/" + accepted.get("id") + "/pdf").header("Authorization", TOKEN))
                 .andExpect(status().isNotFound());
         assertThat(jdbc.sql("SELECT coalesce(details::text, '-') FROM audit_log WHERE action = 'submission.pdf_exported' ORDER BY at")
                         .query(String.class).list())
@@ -96,7 +97,7 @@ class PdfTest {
     void givesTheRespondentAReceiptWithoutSensitiveAnswers() throws Exception {
         String token = (String) accepted.get("receiptToken");
         assertThat(token).isNotBlank();
-        byte[] pdf = mvc.perform(get("/v1/forms/order/receipt").header("Formkiln-Receipt", token))
+        byte[] pdf = mvc.perform(get("/v1/w/default/forms/order/receipt").header("Formkiln-Receipt", token))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Disposition", "attachment; filename=\"order-receipt.pdf\""))
                 .andReturn().getResponse().getContentAsByteArray();
@@ -104,8 +105,8 @@ class PdfTest {
         assertThat(text).contains("Receipt for your response").contains("Thanks for your order.").contains("Ada")
                 .doesNotContain("Card number").doesNotContain("••••").doesNotContain("4111");
 
-        mvc.perform(get("/v1/forms/order/receipt")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/v1/forms/order/receipt").header("Formkiln-Receipt", token + "x")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/v1/forms/other/receipt").header("Formkiln-Receipt", token)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/w/default/forms/order/receipt")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/w/default/forms/order/receipt").header("Formkiln-Receipt", token + "x")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/w/default/forms/other/receipt").header("Formkiln-Receipt", token)).andExpect(status().isUnauthorized());
     }
 }

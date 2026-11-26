@@ -1,5 +1,6 @@
 package io.formkiln.server.notifications;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.Mailer;
 import io.formkiln.server.accounts.Secrets;
@@ -255,7 +256,7 @@ public class NotificationService {
             throw new RuntimeException4xx(HttpStatus.TOO_MANY_REQUESTS, "tooManyEmails",
                     "Too many emails for this form today. Use the link you already received.");
         }
-        String link = hostedUrl + "/f/" + formKey + "#draft=" + draftToken;
+        String link = hostedUrl + "/f/" + WorkspaceContext.require().slug() + "/" + formKey + "#draft=" + draftToken;
         String subject = MailTemplate.subject("Continue your form: {{form.title}}", Map.of("form.title", title));
         String body = """
                 Use this link to continue %s where you left off:

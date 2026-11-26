@@ -31,7 +31,7 @@ class ErrorDispatchTest {
 
     @RestController
     static class FailingController {
-        @GetMapping("/v1/manage/test-failure")
+        @GetMapping("/v1/manage/workspaces/default/test-failure")
         String fail() {
             throw new IllegalStateException("boom");
         }
@@ -43,7 +43,7 @@ class ErrorDispatchTest {
     @Test
     void unhandledErrorsAreServerErrors() throws Exception {
         HttpResponse<String> response = HttpClient.newHttpClient().send(
-                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/manage/test-failure"))
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/v1/manage/workspaces/default/test-failure"))
                         .header("Authorization", "Bearer test-token")
                         .build(),
                 HttpResponse.BodyHandlers.ofString());

@@ -2,9 +2,9 @@ package io.formkiln.server.web;
 
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.notifications.NotificationRepository.Settings;
-import io.formkiln.server.notifications.NotificationService;
 import io.formkiln.server.notifications.NotificationService.MailView;
 import io.formkiln.server.notifications.NotificationService.SettingsView;
+import io.formkiln.server.notifications.NotificationService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.UUID;
@@ -40,12 +40,12 @@ public class NotificationsApi {
         this.notifications = notifications;
     }
 
-    @GetMapping("/v1/manage/forms/{key}/notifications")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/notifications")
     public SettingsView settings(@PathVariable String key) {
         return notifications.settings(key);
     }
 
-    @PutMapping("/v1/manage/forms/{key}/notifications")
+    @PutMapping("/v1/manage/workspaces/{workspace}/forms/{key}/notifications")
     public SettingsView update(@PathVariable String key, @RequestBody SettingsRequest body, HttpServletRequest request) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         boolean member = auth != null && auth.getPrincipal() instanceof AdminPrincipal;
@@ -54,7 +54,7 @@ public class NotificationsApi {
     }
 
     /** Recent emails of the form (recipients masked), newest first. */
-    @GetMapping("/v1/manage/forms/{key}/mail")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/mail")
     public List<MailView> mail(@PathVariable String key, @RequestParam(defaultValue = "50") int limit) {
         return notifications.log(key, Math.clamp(limit, 1, MAX_PAGE));
     }

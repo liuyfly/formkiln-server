@@ -4,39 +4,39 @@ import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
+import io.formkiln.server.forms.FolderService;
 import io.formkiln.server.forms.FormRepository.FormSummary;
-import io.formkiln.server.forms.FormService;
 import io.formkiln.server.forms.FormService.AcceptedSubmission;
-import io.formkiln.server.forms.FormService.NotFoundException;
 import io.formkiln.server.forms.FormService.Access;
+import io.formkiln.server.forms.FormService.NotFoundException;
 import io.formkiln.server.forms.FormService.PublishedForm;
 import io.formkiln.server.forms.FormService.RuntimeForm;
 import io.formkiln.server.forms.FormService.SubmissionInput;
 import io.formkiln.server.forms.FormService.SubmissionView;
+import io.formkiln.server.forms.FormService;
 import io.formkiln.server.forms.SubmissionExport;
-import io.formkiln.server.platform.DraftService;
 import io.formkiln.server.platform.DraftService.DraftCreated;
 import io.formkiln.server.platform.DraftService.DraftView;
+import io.formkiln.server.platform.DraftService;
 import io.formkiln.server.platform.EmbedTokens;
-import io.formkiln.server.platform.FileService;
 import io.formkiln.server.platform.FileService.StoredFile;
+import io.formkiln.server.platform.FileService;
 import io.formkiln.server.platform.PlatformRepository;
 import io.formkiln.server.platform.RuntimeException4xx;
-import io.formkiln.server.platform.WebhookService;
 import io.formkiln.server.platform.WebhookService.DeliveryView;
 import io.formkiln.server.platform.WebhookService.EndpointView;
+import io.formkiln.server.platform.WebhookService;
+import io.formkiln.server.workspaces.WorkspaceContext;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.util.LinkedHashMap;
-import org.springframework.web.bind.annotation.PatchMapping;
-import io.formkiln.server.forms.FolderService;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -52,6 +52,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -148,13 +149,13 @@ public class FormApi {
     // ------------------------------------------------------------------ runtime (public or embed token)
 
     /** The latest published version, access mode and any human verification to show. */
-    @GetMapping("/v1/forms/{key}")
+    @GetMapping("/v1/w/{workspace}/forms/{key}")
     public RuntimeForm form(@PathVariable String key, @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth) {
         return forms.runtimeForm(key, forms.access(key, auth));
     }
 
     /** Re-validates and stores a submission. 422 with errors when the answers are invalid. */
-    @PostMapping("/v1/forms/{key}/submissions")
+    @PostMapping("/v1/w/{workspace}/forms/{key}/submissions")
     public ResponseEntity<AcceptedSubmission> submit(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -176,7 +177,7 @@ public class FormApi {
     }
 
     /** The respondent's receipt as a PDF (receipt token from the submission response, for one hour). */
-    @GetMapping("/v1/forms/{key}/receipt")
+    @GetMapping("/v1/w/{workspace}/forms/{key}/receipt")
     public ResponseEntity<byte[]> receipt(
             @PathVariable String key,
             @RequestHeader(value = RECEIPT_HEADER, required = false) String token,
@@ -186,7 +187,7 @@ public class FormApi {
     }
 
     /** Creates a draft; the returned token is the only way to read or update it. */
-    @PostMapping("/v1/forms/{key}/drafts")
+    @PostMapping("/v1/w/{workspace}/forms/{key}/drafts")
     public ResponseEntity<DraftCreated> createDraft(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -195,7 +196,7 @@ public class FormApi {
         return ResponseEntity.status(201).body(drafts.create(access.formId(), answers(body.answers())));
     }
 
-    @GetMapping("/v1/forms/{key}/drafts")
+    @GetMapping("/v1/w/{workspace}/forms/{key}/drafts")
     public DraftView readDraft(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -203,7 +204,7 @@ public class FormApi {
         return drafts.read(forms.access(key, auth).formId(), token);
     }
 
-    @PutMapping("/v1/forms/{key}/drafts")
+    @PutMapping("/v1/w/{workspace}/forms/{key}/drafts")
     public DraftView saveDraft(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -213,7 +214,7 @@ public class FormApi {
     }
 
     /** Emails a link that reopens the draft (when the form offers it). */
-    @PostMapping("/v1/forms/{key}/drafts/resume-link")
+    @PostMapping("/v1/w/{workspace}/forms/{key}/drafts/resume-link")
     public ResponseEntity<Void> resumeLink(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -223,7 +224,7 @@ public class FormApi {
         return ResponseEntity.accepted().build();
     }
 
-    @DeleteMapping("/v1/forms/{key}/drafts")
+    @DeleteMapping("/v1/w/{workspace}/forms/{key}/drafts")
     public ResponseEntity<Void> deleteDraft(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -233,7 +234,7 @@ public class FormApi {
     }
 
     /** Uploads one file for a file field (multipart: {@code field}, {@code file}); returns its reference. */
-    @PostMapping(path = "/v1/forms/{key}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(path = "/v1/w/{workspace}/forms/{key}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> upload(
             @PathVariable String key,
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
@@ -250,13 +251,13 @@ public class FormApi {
     // ------------------------------------------------------------------ management (viewer reads, editor writes)
 
     /** Active forms; {@code archived=true} lists the archived ones instead. */
-    @GetMapping("/v1/manage/forms")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms")
     public List<FormSummary> listForms(@RequestParam(defaultValue = "false") boolean archived) {
         return forms.list(archived);
     }
 
     /** Hides a form and stops serving it; its data is kept (admin only). */
-    @PostMapping("/v1/manage/forms/{key}/archive")
+    @PostMapping("/v1/manage/workspaces/{workspace}/forms/{key}/archive")
     public Map<String, Object> archive(@PathVariable String key, HttpServletRequest request) {
         forms.archive(key);
         record("form.archived", key, null, request);
@@ -264,14 +265,14 @@ public class FormApi {
     }
 
     /** Serves an archived form again (admin only). */
-    @PostMapping("/v1/manage/forms/{key}/restore")
+    @PostMapping("/v1/manage/workspaces/{workspace}/forms/{key}/restore")
     public Map<String, Object> restore(@PathVariable String key, HttpServletRequest request) {
         forms.restore(key);
         record("form.restored", key, null, request);
         return Map.of("key", key, "archived", false);
     }
 
-    @PutMapping("/v1/manage/forms/{key}/folder")
+    @PutMapping("/v1/manage/workspaces/{workspace}/forms/{key}/folder")
     public Map<String, Object> moveToFolder(@PathVariable String key, @RequestBody MoveRequest body, HttpServletRequest request) {
         String folder = folders.moveForm(key, body.folderId());
         Map<String, Object> details = new LinkedHashMap<>();
@@ -285,26 +286,26 @@ public class FormApi {
 
     // ------------------------------------------------------------------ folders
 
-    @GetMapping("/v1/manage/folders")
+    @GetMapping("/v1/manage/workspaces/{workspace}/folders")
     public List<FolderService.Folder> listFolders() {
         return folders.list();
     }
 
-    @PostMapping("/v1/manage/folders")
+    @PostMapping("/v1/manage/workspaces/{workspace}/folders")
     public ResponseEntity<FolderService.Folder> createFolder(@RequestBody FolderRequest body, HttpServletRequest request) {
         FolderService.Folder folder = folders.create(body.name());
         record("folder.created", folder.name(), Map.of("id", folder.id().toString()), request);
         return ResponseEntity.status(HttpStatus.CREATED).body(folder);
     }
 
-    @PatchMapping("/v1/manage/folders/{id}")
+    @PatchMapping("/v1/manage/workspaces/{workspace}/folders/{id}")
     public FolderService.Folder renameFolder(@PathVariable UUID id, @RequestBody FolderRequest body, HttpServletRequest request) {
         FolderService.Folder folder = folders.rename(id, body.name());
         record("folder.renamed", folder.name(), Map.of("id", id.toString()), request);
         return folder;
     }
 
-    @DeleteMapping("/v1/manage/folders/{id}")
+    @DeleteMapping("/v1/manage/workspaces/{workspace}/folders/{id}")
     public ResponseEntity<Void> deleteFolder(@PathVariable UUID id, HttpServletRequest request) {
         String name = folders.delete(id);
         record("folder.deleted", name, Map.of("id", id.toString()), request);
@@ -312,22 +313,22 @@ public class FormApi {
     }
 
     /** Publishes a new immutable version. The body is the form document. */
-    @PostMapping("/v1/manage/forms/{key}/versions")
+    @PostMapping("/v1/manage/workspaces/{workspace}/forms/{key}/versions")
     public ResponseEntity<Map<String, Object>> publish(@PathVariable String key, @RequestBody JsonNode document,
             HttpServletRequest request) {
         PublishedForm published = forms.publish(key, document);
         record("form.published", key, Map.of("version", published.version()), request);
-        return ResponseEntity.created(URI.create("/v1/manage/forms/" + key + "/versions/" + published.version()))
+        return ResponseEntity.created(URI.create("/v1/manage/workspaces/" + WorkspaceContext.require().slug() + "/forms/" + key + "/versions/" + published.version()))
                 .body(Map.of("key", key, "version", published.version(), "publishedAt", published.publishedAt()));
     }
 
     /** One version with its definition (labels, field types; for display and editing). */
-    @GetMapping("/v1/manage/forms/{key}/versions/{version}")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/versions/{version}")
     public PublishedForm version(@PathVariable String key, @PathVariable int version) {
         return forms.version(key, version);
     }
 
-    @GetMapping("/v1/manage/forms/{key}/versions")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/versions")
     public List<Map<String, Object>> versions(@PathVariable String key) {
         return forms.versions(key).stream()
                 .map(v -> Map.<String, Object>of("version", v.version(), "publishedAt", v.publishedAt()))
@@ -338,7 +339,7 @@ public class FormApi {
      * Submissions, newest first. Sensitive values are masked; {@code reveal=true} (editors only)
      * shows them and is audited. Pass the last {@code submittedAt} as {@code before} for the next page.
      */
-    @GetMapping("/v1/manage/forms/{key}/submissions")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions")
     public List<SubmissionView> submissions(
             @PathVariable String key,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant before,
@@ -358,7 +359,7 @@ public class FormApi {
      * Exports all submissions as CSV (audited). Sensitive values are masked unless {@code reveal=true}
      * (editors only).
      */
-    @GetMapping("/v1/manage/forms/{key}/submissions/export")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions/export")
     public ResponseEntity<StreamingResponseBody> export(
             @PathVariable String key, @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
         if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
@@ -375,7 +376,7 @@ public class FormApi {
     }
 
     /** A submission as a PDF (audited); {@code reveal=true} (editors only) shows sensitive values. */
-    @GetMapping("/v1/manage/forms/{key}/submissions/{id}/pdf")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions/{id}/pdf")
     public ResponseEntity<byte[]> submissionPdf(@PathVariable String key, @PathVariable UUID id,
             @RequestParam(defaultValue = "false") boolean reveal, HttpServletRequest request) {
         if (reveal && !hasAuthority("editor") && !hasAuthority("SERVICE")) {
@@ -387,7 +388,7 @@ public class FormApi {
     }
 
     /** Downloads a file of a submission (audited). */
-    @GetMapping("/v1/manage/forms/{key}/files/{id}")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/files/{id}")
     public ResponseEntity<InputStreamResource> download(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
         UUID formId = platform.findForm(key).orElseThrow(() -> new NotFoundException("Form " + key + " is not published")).id();
         StoredFile file = files.download(formId, id);
@@ -402,7 +403,7 @@ public class FormApi {
                 .body(new InputStreamResource(file.content()));
     }
 
-    @PutMapping("/v1/manage/forms/{key}/access")
+    @PutMapping("/v1/manage/workspaces/{workspace}/forms/{key}/access")
     public Map<String, String> setAccess(@PathVariable String key, @RequestBody AccessRequest body, HttpServletRequest request) {
         forms.setAccessMode(key, body.mode());
         record("form.access_changed", key, Map.of("mode", body.mode()), request);
@@ -410,7 +411,7 @@ public class FormApi {
     }
 
     /** Issues a short-lived embed token for a token-mode form (for the embedding application's backend). */
-    @PostMapping("/v1/manage/embed-tokens")
+    @PostMapping("/v1/manage/workspaces/{workspace}/embed-tokens")
     public Map<String, Object> embedToken(@RequestBody EmbedTokenRequest body, HttpServletRequest request) {
         forms.latest(body.formKey() == null ? "" : body.formKey());
         Duration ttl = body.ttlSeconds() == null ? EmbedTokens.DEFAULT_TTL : Duration.ofSeconds(body.ttlSeconds());
@@ -428,13 +429,13 @@ public class FormApi {
         return Map.of("token", embedTokens.encode(claims), "expiresAt", claims.expiresAt());
     }
 
-    @GetMapping("/v1/manage/forms/{key}/webhooks")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/webhooks")
     public List<EndpointView> webhooks(@PathVariable String key) {
         return webhooks.list(key);
     }
 
     /** Creates a webhook; the signing secret is returned only in this response. */
-    @PostMapping("/v1/manage/forms/{key}/webhooks")
+    @PostMapping("/v1/manage/workspaces/{workspace}/forms/{key}/webhooks")
     public ResponseEntity<EndpointView> createWebhook(@PathVariable String key, @RequestBody WebhookRequest body,
             HttpServletRequest request) {
         EndpointView created = webhooks.create(key, body.url());
@@ -442,19 +443,19 @@ public class FormApi {
         return ResponseEntity.status(201).body(created);
     }
 
-    @DeleteMapping("/v1/manage/forms/{key}/webhooks/{id}")
+    @DeleteMapping("/v1/manage/workspaces/{workspace}/forms/{key}/webhooks/{id}")
     public ResponseEntity<Void> deleteWebhook(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
         webhooks.delete(key, id);
         record("webhook.deleted", key, Map.of("id", id.toString()), request);
         return ResponseEntity.noContent().build();
     }
 
-    @GetMapping("/v1/manage/forms/{key}/webhooks/{id}/deliveries")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/webhooks/{id}/deliveries")
     public List<DeliveryView> deliveries(@PathVariable String key, @PathVariable UUID id, @RequestParam(defaultValue = "50") int limit) {
         return webhooks.deliveries(key, id, Math.clamp(limit, 1, MAX_PAGE));
     }
 
-    @PostMapping("/v1/manage/forms/{key}/webhook-deliveries/{id}/redeliver")
+    @PostMapping("/v1/manage/workspaces/{workspace}/forms/{key}/webhook-deliveries/{id}/redeliver")
     public DeliveryView redeliver(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
         DeliveryView delivery = webhooks.redeliver(key, id);
         record("webhook.redelivered", key, Map.of("deliveryId", id.toString()), request);

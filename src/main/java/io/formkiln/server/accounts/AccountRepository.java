@@ -1,5 +1,6 @@
 package io.formkiln.server.accounts;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -20,7 +21,7 @@ public class AccountRepository {
             String email,
             String passwordHash,
             byte[] totpSecret,
-            String role,
+            boolean instanceAdmin,
             String status,
             int failedLogins,
             Instant lockedUntil,
@@ -32,8 +33,9 @@ public class AccountRepository {
         }
     }
 
-    public record Invitation(
-            UUID id, String email, String role, byte[] totpSecret, UUID invitedBy, Instant createdAt, Instant expiresAt) {}
+    /** An invitation to join {@code workspaceId} with {@code role}; the bootstrap one also grants instance admin. */
+    public record Invitation(UUID id, String email, UUID workspaceId, String role, boolean instanceAdmin, byte[] totpSecret,
+            UUID invitedBy, Instant createdAt, Instant expiresAt) {}
 
     public record Session(UUID id, UUID userId, Instant createdAt, Instant lastSeenAt, Instant expiresAt, String ip, String userAgent) {}
 
@@ -41,7 +43,8 @@ public class AccountRepository {
 
     public record Reset(UUID id, UUID userId, Instant expiresAt) {}
 
-    public record AuditEntry(UUID id, Instant at, String actorType, UUID actorId, String action, String target, String ip, String details) {}
+    public record AuditEntry(UUID id, Instant at, String actorType, UUID actorId, String actorEmail, String workspace, String action,
+            String target, String ip, String details) {}
 
     private final JdbcClient jdbc;
 
@@ -64,7 +67,7 @@ public class AccountRepository {
                 rs.getString("email"),
                 rs.getString("password_hash"),
                 rs.getBytes("totp_secret"),
-                rs.getString("role"),
+                rs.getBoolean("instance_admin"),
                 rs.getString("status"),
                 rs.getInt("failed_logins"),
                 instant(rs, "locked_until"),
@@ -78,8 +81,8 @@ public class AccountRepository {
         return jdbc.sql("SELECT COUNT(*) FROM admin_user").query(Long.class).single();
     }
 
-    public long countActiveAdmins() {
-        return jdbc.sql("SELECT COUNT(*) FROM admin_user WHERE role = 'admin' AND status = 'active'")
+    public long countActiveInstanceAdmins() {
+        return jdbc.sql("SELECT COUNT(*) FROM admin_user WHERE instance_admin AND status = 'active'")
                 .query(Long.class)
                 .single();
     }
@@ -101,30 +104,17 @@ public class AccountRepository {
         return jdbc.sql("SELECT * FROM admin_user ORDER BY created_at").query(AccountRepository::user).list();
     }
 
-    /**
-     * Creates an account with a membership of the default workspace. Until roles are checked per
-     * workspace, the account role and the membership role are the same, and admins are instance
-     * admins (as the V10 migration mapped them).
-     */
-    public UUID insertUser(String email, String passwordHash, byte[] totpSecret, String role) {
-        UUID id = jdbc.sql("""
-                        INSERT INTO admin_user (email, password_hash, totp_secret, role, instance_admin)
-                        VALUES (:email, :hash, :totp, :role, :role = 'admin') RETURNING id
+    public UUID insertUser(String email, String passwordHash, byte[] totpSecret, boolean instanceAdmin) {
+        return jdbc.sql("""
+                        INSERT INTO admin_user (email, password_hash, totp_secret, instance_admin)
+                        VALUES (:email, :hash, :totp, :instanceAdmin) RETURNING id
                         """)
                 .param("email", email)
                 .param("hash", passwordHash)
                 .param("totp", totpSecret)
-                .param("role", role)
+                .param("instanceAdmin", instanceAdmin)
                 .query(UUID.class)
                 .single();
-        jdbc.sql("""
-                        INSERT INTO workspace_member (workspace_id, user_id, role)
-                        VALUES ((SELECT id FROM workspace WHERE slug = 'default'), :id, :role)
-                        """)
-                .param("id", id)
-                .param("role", role)
-                .update();
-        return id;
     }
 
     public void recordLoginFailure(UUID id, int failedLogins, Instant lockedUntil) {
@@ -171,14 +161,8 @@ public class AccountRepository {
         jdbc.sql("UPDATE admin_user SET totp_secret = :totp WHERE id = :id").param("totp", totpSecret).param("id", id).update();
     }
 
-    public void updateRole(UUID id, String role) {
-        jdbc.sql("UPDATE admin_user SET role = :role, instance_admin = :role = 'admin' WHERE id = :id")
-                .param("role", role).param("id", id).update();
-        jdbc.sql("""
-                        UPDATE workspace_member SET role = :role
-                        WHERE user_id = :id AND workspace_id = (SELECT id FROM workspace WHERE slug = 'default')
-                        """)
-                .param("role", role).param("id", id).update();
+    public void updateInstanceAdmin(UUID id, boolean instanceAdmin) {
+        jdbc.sql("UPDATE admin_user SET instance_admin = :flag WHERE id = :id").param("flag", instanceAdmin).param("id", id).update();
     }
 
     public void updateStatus(UUID id, String status) {
@@ -191,7 +175,9 @@ public class AccountRepository {
         return new Invitation(
                 rs.getObject("id", UUID.class),
                 rs.getString("email"),
+                rs.getObject("workspace_id", UUID.class),
                 rs.getString("role"),
+                rs.getBoolean("instance_admin"),
                 rs.getBytes("totp_secret"),
                 rs.getObject("invited_by", UUID.class),
                 instant(rs, "created_at"),
@@ -200,14 +186,17 @@ public class AccountRepository {
 
     private static final String OPEN = "accepted_at IS NULL AND revoked_at IS NULL";
 
-    public UUID insertInvitation(String email, String role, byte[] tokenHash, UUID invitedBy, Instant expiresAt) {
+    public UUID insertInvitation(String email, UUID workspaceId, String role, boolean instanceAdmin, byte[] tokenHash,
+            UUID invitedBy, Instant expiresAt) {
         return jdbc.sql("""
-                        INSERT INTO admin_invitation (email, role, token_hash, invited_by, expires_at, workspace_id)
-                        VALUES (:email, :role, :hash, :by, :expires, (SELECT id FROM workspace WHERE slug = 'default'))
+                        INSERT INTO admin_invitation (email, workspace_id, role, instance_admin, token_hash, invited_by, expires_at)
+                        VALUES (:email, :workspace, :role, :instanceAdmin, :hash, :by, :expires)
                         RETURNING id
                         """)
                 .param("email", email)
+                .param("workspace", workspaceId)
                 .param("role", role)
+                .param("instanceAdmin", instanceAdmin)
                 .param("hash", tokenHash)
                 .param("by", invitedBy)
                 .param("expires", odt(expiresAt))
@@ -230,15 +219,30 @@ public class AccountRepository {
                 .optional();
     }
 
-    public Optional<Invitation> findOpenInvitationByEmail(String email) {
-        return jdbc.sql("SELECT * FROM admin_invitation WHERE email = :email AND " + OPEN)
+    public Optional<Invitation> findOpenInvitationByEmail(UUID workspaceId, String email) {
+        return jdbc.sql("SELECT * FROM admin_invitation WHERE workspace_id = :workspace AND email = :email AND " + OPEN)
+                .param("workspace", workspaceId)
                 .param("email", email)
                 .query(AccountRepository::invitation)
                 .optional();
     }
 
-    public List<Invitation> listOpenInvitations() {
-        return jdbc.sql("SELECT * FROM admin_invitation WHERE " + OPEN + " ORDER BY created_at")
+    /** Open invitations for an address, in every workspace (locked for acceptance). */
+    public List<Invitation> listOpenInvitationsFor(String email) {
+        return jdbc.sql("SELECT * FROM admin_invitation WHERE email = :email AND " + OPEN + " ORDER BY created_at FOR UPDATE")
+                .param("email", email)
+                .query(AccountRepository::invitation)
+                .list();
+    }
+
+    public boolean hasOpenInvitation(String email, Instant now) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM admin_invitation WHERE email = :email AND expires_at > :now AND " + OPEN + ")")
+                .param("email", email).param("now", odt(now)).query(Boolean.class).single();
+    }
+
+    public List<Invitation> listOpenInvitations(UUID workspaceId) {
+        return jdbc.sql("SELECT * FROM admin_invitation WHERE workspace_id = :workspace AND " + OPEN + " ORDER BY created_at")
+                .param("workspace", workspaceId)
                 .query(AccountRepository::invitation)
                 .list();
     }
@@ -420,11 +424,19 @@ public class AccountRepository {
 
     // ---------------------------------------------------------------- audit
 
+    /** Records an action in the audit log of the request's workspace (instance-wide outside one). */
     public void audit(String actorType, UUID actorId, String action, String target, String ip, String detailsJson) {
+        auditIn(WorkspaceContext.current().map(WorkspaceContext.Current::id).orElse(null), actorType, actorId, action, target, ip,
+                detailsJson);
+    }
+
+    /** Records an action in the audit log of {@code workspaceId} (null: instance-wide). */
+    public void auditIn(UUID workspaceId, String actorType, UUID actorId, String action, String target, String ip, String detailsJson) {
         jdbc.sql("""
-                        INSERT INTO audit_log (actor_type, actor_id, action, target, ip, details)
-                        VALUES (:type, :actor, :action, :target, :ip, CAST(:details AS jsonb))
+                        INSERT INTO audit_log (workspace_id, actor_type, actor_id, action, target, ip, details)
+                        VALUES (:workspace, :type, :actor, :action, :target, :ip, CAST(:details AS jsonb))
                         """)
+                .param("workspace", workspaceId)
                 .param("type", actorType)
                 .param("actor", actorId)
                 .param("action", action)
@@ -434,12 +446,19 @@ public class AccountRepository {
                 .update();
     }
 
-    public List<AuditEntry> listAudit(Instant before, int limit) {
+    /** Entries of one workspace, or of the whole instance when {@code workspaceId} is null. */
+    public List<AuditEntry> listAudit(UUID workspaceId, Instant before, int limit) {
         return jdbc.sql("""
-                        SELECT id, at, actor_type, actor_id, action, target, ip, details::text AS details FROM audit_log
-                        WHERE CAST(:before AS timestamptz) IS NULL OR at < :before
-                        ORDER BY at DESC, id DESC LIMIT :limit
+                        SELECT a.id, a.at, a.actor_type, a.actor_id, u.email AS actor_email, w.slug AS workspace, a.action,
+                               a.target, a.ip, a.details::text AS details
+                        FROM audit_log a
+                        LEFT JOIN admin_user u ON u.id = a.actor_id
+                        LEFT JOIN workspace w ON w.id = a.workspace_id
+                        WHERE (CAST(:workspace AS uuid) IS NULL OR a.workspace_id = :workspace)
+                          AND (CAST(:before AS timestamptz) IS NULL OR a.at < :before)
+                        ORDER BY a.at DESC, a.id DESC LIMIT :limit
                         """)
+                .param("workspace", workspaceId)
                 .param("before", odt(before))
                 .param("limit", limit)
                 .query((rs, n) -> new AuditEntry(
@@ -447,6 +466,8 @@ public class AccountRepository {
                         instant(rs, "at"),
                         rs.getString("actor_type"),
                         rs.getObject("actor_id", UUID.class),
+                        rs.getString("actor_email"),
+                        rs.getString("workspace"),
                         rs.getString("action"),
                         rs.getString("target"),
                         rs.getString("ip"),

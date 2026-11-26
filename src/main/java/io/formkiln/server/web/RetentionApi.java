@@ -1,9 +1,9 @@
 package io.formkiln.server.web;
 
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
-import io.formkiln.server.retention.RetentionService;
 import io.formkiln.server.retention.RetentionService.Actor;
 import io.formkiln.server.retention.RetentionService.ErasureResult;
+import io.formkiln.server.retention.RetentionService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.HashMap;
 import java.util.Map;
@@ -42,13 +42,13 @@ public class RetentionApi {
     }
 
     /** Deletes a submission with its files (editors; audited). */
-    @DeleteMapping("/v1/manage/forms/{key}/submissions/{id}")
+    @DeleteMapping("/v1/manage/workspaces/{workspace}/forms/{key}/submissions/{id}")
     public ResponseEntity<Void> delete(@PathVariable String key, @PathVariable UUID id, HttpServletRequest request) {
         retention.deleteSubmission(key, id, actor(request));
         return ResponseEntity.noContent().build();
     }
 
-    @GetMapping("/v1/manage/forms/{key}/retention")
+    @GetMapping("/v1/manage/workspaces/{workspace}/forms/{key}/retention")
     public Map<String, Object> get(@PathVariable String key) {
         Map<String, Object> body = new HashMap<>();
         body.put("days", retention.retention(key));
@@ -56,7 +56,7 @@ public class RetentionApi {
     }
 
     /** {@code days}: keep submissions this many days (1–36500), or null to keep them until deleted. */
-    @PutMapping("/v1/manage/forms/{key}/retention")
+    @PutMapping("/v1/manage/workspaces/{workspace}/forms/{key}/retention")
     public Map<String, Object> set(@PathVariable String key, @RequestBody RetentionRequest body, HttpServletRequest request) {
         Map<String, Object> result = new HashMap<>();
         result.put("days", retention.setRetention(key, body.days(), actor(request)));
@@ -67,7 +67,7 @@ public class RetentionApi {
      * Finds ({@code dryRun}, the default) or deletes every submission of a person by email address
      * or embed-token subject, across all forms. Admins only.
      */
-    @PostMapping("/v1/admin/erasure")
+    @PostMapping("/v1/admin/workspaces/{workspace}/erasure")
     public ErasureResult erase(@RequestBody ErasureRequest body, HttpServletRequest request) {
         return retention.erase(body.email(), body.subject(), !Boolean.FALSE.equals(body.dryRun()), actor(request));
     }

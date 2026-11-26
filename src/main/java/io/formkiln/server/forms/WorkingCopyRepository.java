@@ -1,5 +1,6 @@
 package io.formkiln.server.forms;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Optional;
@@ -17,9 +18,6 @@ public class WorkingCopyRepository {
     public record StoredCopy(UUID formId, String documentJson, long revision, Integer baseVersion, Instant updatedAt,
             UUID updatedBy, String updatedByEmail) {}
 
-    /** Until workspaces are resolved per request, new forms go into the default workspace. */
-    static final String DEFAULT_WORKSPACE = "(SELECT id FROM workspace WHERE slug = 'default')";
-
     private final JdbcClient jdbc;
 
     public WorkingCopyRepository(JdbcClient jdbc) {
@@ -28,8 +26,9 @@ public class WorkingCopyRepository {
 
     /** The form, optionally locking its row (serializes saves and publishes of one form). */
     public Optional<FormRef> findForm(String key, boolean lock) {
-        Optional<UUID> id = jdbc.sql("SELECT id FROM form WHERE key = :key" + (lock ? " FOR UPDATE" : ""))
+        Optional<UUID> id = jdbc.sql("SELECT id FROM form WHERE key = :key AND workspace_id = :ws" + (lock ? " FOR UPDATE" : ""))
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .query(UUID.class)
                 .optional();
         return id.map(formId -> {
@@ -44,8 +43,9 @@ public class WorkingCopyRepository {
 
     /** Creates an unpublished form; empty when the key is taken. */
     public Optional<UUID> createForm(String key) {
-        return jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, " + DEFAULT_WORKSPACE + ") ON CONFLICT (workspace_id, key) DO NOTHING RETURNING id")
+        return jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, :ws) ON CONFLICT (workspace_id, key) DO NOTHING RETURNING id")
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .query(UUID.class)
                 .optional();
     }

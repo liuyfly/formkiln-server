@@ -1,15 +1,21 @@
 package io.formkiln.server.web;
 
 import io.formkiln.server.accounts.AccountRepository.AuditEntry;
-import io.formkiln.server.accounts.AccountService;
 import io.formkiln.server.accounts.AccountService.Actor;
+import io.formkiln.server.accounts.AccountService.AddResult;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.accounts.AccountService.InvitationDetails;
 import io.formkiln.server.accounts.AccountService.InvitationView;
 import io.formkiln.server.accounts.AccountService.LoginChallenge;
+import io.formkiln.server.accounts.AccountService.MemberView;
 import io.formkiln.server.accounts.AccountService.NewSession;
 import io.formkiln.server.accounts.AccountService.SessionView;
 import io.formkiln.server.accounts.AccountService.UserView;
+import io.formkiln.server.accounts.AccountService;
+import io.formkiln.server.workspaces.WorkspaceContext;
+import io.formkiln.server.workspaces.WorkspaceRepository;
+import io.formkiln.server.workspaces.WorkspaceService.WorkspaceView;
+import io.formkiln.server.workspaces.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.time.Instant;
@@ -20,6 +26,7 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -57,13 +64,19 @@ public class AdminApi {
 
     public record InviteRequest(String email, String role) {}
 
-    public record MemberUpdate(String role, String status) {}
+    public record MemberUpdate(String role) {}
+
+    public record AccountUpdate(String status, Boolean instanceAdmin) {}
+
+    public record WorkspaceRequest(String slug, String name) {}
 
     private final AccountService accounts;
+    private final WorkspaceService workspaces;
     private final boolean secureCookie;
 
-    public AdminApi(AccountService accounts, @Value("${formkiln.cookie-secure:true}") boolean secureCookie) {
+    public AdminApi(AccountService accounts, WorkspaceService workspaces, @Value("${formkiln.cookie-secure:true}") boolean secureCookie) {
         this.accounts = accounts;
+        this.workspaces = workspaces;
         this.secureCookie = secureCookie;
     }
 
@@ -171,66 +184,129 @@ public class AdminApi {
         return ResponseEntity.noContent().build();
     }
 
-    // ---------------------------------------------------------------- administration (admin role)
+    // ---------------------------------------------------------------- workspace administration
 
-    @GetMapping("/v1/admin/members")
-    public List<UserView> members() {
+    /** The workspace and the caller's role in it. */
+    @GetMapping("/v1/admin/workspaces/{workspace}")
+    public Map<String, Object> workspace(@PathVariable String workspace) {
+        WorkspaceContext.Current current = WorkspaceContext.require();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("workspace", workspaces.get(workspace));
+        body.put("role", current.role());
+        return body;
+    }
+
+    /** Renames, archives or restores the workspace (its admins, or instance admins). */
+    @PatchMapping("/v1/admin/workspaces/{workspace}")
+    public WorkspaceView updateWorkspace(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @RequestBody WorkspaceService.Update body, HttpServletRequest request) {
+        return workspaces.update(actor(principal, request), workspace, body);
+    }
+
+    @GetMapping("/v1/admin/workspaces/{workspace}/members")
+    public List<MemberView> members(@PathVariable String workspace) {
         return accounts.members();
     }
 
-    @PatchMapping("/v1/admin/members/{id}")
-    public UserView updateMember(
-            @AuthenticationPrincipal AdminPrincipal principal,
-            @PathVariable UUID id,
-            @RequestBody MemberUpdate body,
-            HttpServletRequest request) {
+    /** Adds an existing account at once, or invites a new one. */
+    @PostMapping("/v1/admin/workspaces/{workspace}/members")
+    public ResponseEntity<AddResult> addMember(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @RequestBody InviteRequest body, HttpServletRequest request) {
+        return ResponseEntity.status(201).body(accounts.addMember(actor(principal, request), body.email(), body.role()));
+    }
+
+    @PatchMapping("/v1/admin/workspaces/{workspace}/members/{id}")
+    public MemberView updateMember(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @PathVariable UUID id, @RequestBody MemberUpdate body, HttpServletRequest request) {
+        if (body.role() == null) {
+            throw new AccountService.AccountException(HttpStatus.BAD_REQUEST, "invalidRole", "Role must be admin, editor or viewer.");
+        }
+        return accounts.changeRole(actor(principal, request), id, body.role());
+    }
+
+    @DeleteMapping("/v1/admin/workspaces/{workspace}/members/{id}")
+    public ResponseEntity<Void> removeMember(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @PathVariable UUID id, HttpServletRequest request) {
+        accounts.removeMember(actor(principal, request), id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/v1/admin/workspaces/{workspace}/invitations")
+    public List<InvitationView> invitations(@PathVariable String workspace) {
+        return accounts.openInvitations();
+    }
+
+    @PostMapping("/v1/admin/workspaces/{workspace}/invitations/{id}/resend")
+    public InvitationView resend(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @PathVariable UUID id, HttpServletRequest request) {
+        return accounts.resendInvitation(actor(principal, request), id);
+    }
+
+    @DeleteMapping("/v1/admin/workspaces/{workspace}/invitations/{id}")
+    public ResponseEntity<Void> revokeInvitation(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String workspace,
+            @PathVariable UUID id, HttpServletRequest request) {
+        accounts.revokeInvitation(actor(principal, request), id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/v1/admin/workspaces/{workspace}/audit")
+    public List<AuditEntry> workspaceAudit(@PathVariable String workspace,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant before,
+            @RequestParam(defaultValue = "100") int limit) {
+        return accounts.workspaceAuditLog(before, Math.clamp(limit, 1, 500));
+    }
+
+    // ---------------------------------------------------------------- instance administration
+
+    @GetMapping("/v1/admin/instance/workspaces")
+    public List<WorkspaceRepository.WorkspaceSummary> allWorkspaces() {
+        return workspaces.list();
+    }
+
+    @PostMapping("/v1/admin/instance/workspaces")
+    public ResponseEntity<WorkspaceView> createWorkspace(@AuthenticationPrincipal AdminPrincipal principal,
+            @RequestBody WorkspaceRequest body, HttpServletRequest request) {
+        return ResponseEntity.status(201).body(workspaces.create(actor(principal, request), body.slug(), body.name()));
+    }
+
+    @PatchMapping("/v1/admin/instance/workspaces/{slug}")
+    public WorkspaceView updateAnyWorkspace(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String slug,
+            @RequestBody WorkspaceService.Update body, HttpServletRequest request) {
+        return workspaces.update(actor(principal, request), slug, body);
+    }
+
+    @GetMapping("/v1/admin/instance/accounts")
+    public List<UserView> allAccounts() {
+        return accounts.accounts();
+    }
+
+    @PatchMapping("/v1/admin/instance/accounts/{id}")
+    public UserView updateAccount(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable UUID id,
+            @RequestBody AccountUpdate body, HttpServletRequest request) {
         UserView result = null;
-        if (body.role() != null) {
-            result = accounts.changeRole(actor(principal, request), id, body.role());
+        if (body.instanceAdmin() != null) {
+            result = accounts.setInstanceAdmin(actor(principal, request), id, body.instanceAdmin());
         }
         if (body.status() != null) {
             result = accounts.changeStatus(actor(principal, request), id, body.status());
         }
-        return result != null ? result : accounts.members().stream().filter(m -> m.id().equals(id.toString())).findFirst()
-                .orElseThrow(() -> new AccountService.AccountException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "notFound", "No such member."));
+        if (result == null) {
+            throw new AccountService.AccountException(HttpStatus.BAD_REQUEST, "noChanges", "Send status or instanceAdmin.");
+        }
+        return result;
     }
 
-    @PostMapping("/v1/admin/members/{id}/reset-totp")
+    @PostMapping("/v1/admin/instance/accounts/{id}/reset-totp")
     public ResponseEntity<Void> resetTotp(
             @AuthenticationPrincipal AdminPrincipal principal, @PathVariable UUID id, HttpServletRequest request) {
         accounts.resetTotp(actor(principal, request), id);
         return ResponseEntity.noContent().build();
     }
 
-    @GetMapping("/v1/admin/invitations")
-    public List<InvitationView> invitations() {
-        return accounts.openInvitations();
-    }
-
-    @PostMapping("/v1/admin/invitations")
-    public ResponseEntity<InvitationView> invite(
-            @AuthenticationPrincipal AdminPrincipal principal, @RequestBody InviteRequest body, HttpServletRequest request) {
-        return ResponseEntity.status(201).body(accounts.invite(actor(principal, request), body.email(), body.role()));
-    }
-
-    @PostMapping("/v1/admin/invitations/{id}/resend")
-    public InvitationView resend(
-            @AuthenticationPrincipal AdminPrincipal principal, @PathVariable UUID id, HttpServletRequest request) {
-        return accounts.resendInvitation(actor(principal, request), id);
-    }
-
-    @DeleteMapping("/v1/admin/invitations/{id}")
-    public ResponseEntity<Void> revokeInvitation(
-            @AuthenticationPrincipal AdminPrincipal principal, @PathVariable UUID id, HttpServletRequest request) {
-        accounts.revokeInvitation(actor(principal, request), id);
-        return ResponseEntity.noContent().build();
-    }
-
-    @GetMapping("/v1/admin/audit")
-    public List<AuditEntry> audit(
+    @GetMapping("/v1/admin/instance/audit")
+    public List<AuditEntry> instanceAudit(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant before,
             @RequestParam(defaultValue = "100") int limit) {
-        return accounts.auditLog(before, Math.clamp(limit, 1, 500));
+        return accounts.instanceAuditLog(before, Math.clamp(limit, 1, 500));
     }
 }

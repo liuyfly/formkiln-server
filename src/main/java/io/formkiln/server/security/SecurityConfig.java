@@ -3,6 +3,9 @@ package io.formkiln.server.security;
 import io.formkiln.server.accounts.AccountService;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.web.AdminApi;
+import io.formkiln.server.workspaces.WorkspaceContext;
+import io.formkiln.server.workspaces.WorkspaceRepository;
+import io.formkiln.server.workspaces.WorkspaceRepository.Workspace;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -20,7 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +36,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -42,11 +49,17 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * HTTP security.
  *
  * <ul>
- *   <li>Runtime endpoints ({@code /v1/forms/**}) are public.
- *   <li>Admin members sign in with a session cookie; roles are cumulative
- *       ({@code admin ⊃ editor ⊃ viewer}).
- *   <li>The service token ({@code FORMKILN_SERVICE_TOKEN}) acts as an editor on the management API
- *       only, and never on member administration.
+ *   <li>Runtime endpoints ({@code /v1/w/{workspace}/forms/**}) are public.
+ *   <li>Members sign in with a session cookie. Roles belong to workspace memberships and are
+ *       cumulative ({@code admin ⊃ editor ⊃ viewer}): {@link WorkspaceFilter} resolves the
+ *       workspace named in the URL and grants the caller's role in it for that request only.
+ *       Anyone who is not a member gets 404 for everything under the workspace, so the response
+ *       does not reveal that a workspace or form exists.
+ *   <li>Instance admins manage workspaces and accounts ({@code /v1/admin/instance/**}) and the
+ *       members and audit log of any workspace, but read form data only as members.
+ *   <li>The service token ({@code FORMKILN_SERVICE_TOKEN}) acts as an editor of the
+ *       {@code default} workspace on the management API only, and never on member
+ *       administration.
  *   <li>Unsafe {@code /v1/admin/**} requests, and unsafe requests that carry the session cookie,
  *       must send {@code X-Requested-With: formkiln}: a cross-site page cannot set it without a
  *       CORS preflight, which this server never allows (CSRF defence in addition to the
@@ -61,6 +74,11 @@ public class SecurityConfig {
 
     static final String SERVICE = "SERVICE";
     static final String METRICS = "METRICS";
+    /** Every signed-in account. */
+    static final String MEMBER = "member";
+    static final String INSTANCE_ADMIN = "instanceAdmin";
+    /** The workspace the environment service token belongs to. */
+    static final String SERVICE_WORKSPACE = "default";
     public static final String CSRF_HEADER = "X-Requested-With";
     public static final String CSRF_VALUE = "formkiln";
 
@@ -87,6 +105,7 @@ public class SecurityConfig {
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             AccountService accounts,
+            WorkspaceRepository workspaces,
             @Value("${formkiln.service-token:}") String serviceToken,
             @Value("${formkiln.metrics-token:}") String metricsToken,
             @Value("${formkiln.auth-rate-limit:20}") int authRateLimit,
@@ -106,6 +125,7 @@ public class SecurityConfig {
                         "Too many requests. Try again later."), BasicAuthenticationFilter.class)
                 .addFilterBefore(new ServiceTokenFilter(serviceToken, metricsToken), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
+                .addFilterBefore(new WorkspaceFilter(workspaces), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         // Streaming responses (CSV export) finish on an async dispatch of a request
                         // that was already authorized.
@@ -115,17 +135,20 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/actuator/prometheus").hasAuthority(METRICS)
-                        .requestMatchers("/v1/forms/**").permitAll()
+                        .requestMatchers("/v1/w/*/forms/**").permitAll()
                         .requestMatchers(HttpMethod.POST, PUBLIC_ADMIN).permitAll()
-                        .requestMatchers("/v1/admin/members/**", "/v1/admin/audit/**", "/v1/admin/erasure").hasAuthority("admin")
-                        .requestMatchers("/v1/admin/invitations", "/v1/admin/invitations/*", "/v1/admin/invitations/*/resend")
-                                .hasAuthority("admin")
-                        .requestMatchers("/v1/admin/**").hasAuthority("viewer")
-                        // Archiving hides a form and stops serving it: members with the admin role only.
-                        .requestMatchers(HttpMethod.POST, "/v1/manage/forms/*/archive", "/v1/manage/forms/*/restore")
-                                .hasAuthority("admin")
-                        .requestMatchers(HttpMethod.GET, "/v1/manage/**").hasAnyAuthority("viewer", SERVICE)
-                        .requestMatchers("/v1/manage/**").hasAnyAuthority("editor", SERVICE)
+                        .requestMatchers("/v1/admin/instance/**").hasAuthority(INSTANCE_ADMIN)
+                        .requestMatchers("/v1/admin/workspaces/*/members/**", "/v1/admin/workspaces/*/invitations/**",
+                                "/v1/admin/workspaces/*/audit", "/v1/admin/workspaces/*/erasure").hasAuthority("admin")
+                        .requestMatchers(HttpMethod.PATCH, "/v1/admin/workspaces/*").hasAuthority("admin")
+                        .requestMatchers(HttpMethod.GET, "/v1/admin/workspaces/*").hasAuthority("viewer")
+                        .requestMatchers("/v1/admin/workspaces/**").denyAll()
+                        .requestMatchers("/v1/admin/**").hasAuthority(MEMBER)
+                        // Archiving hides a form and stops serving it: workspace admins only.
+                        .requestMatchers(HttpMethod.POST, "/v1/manage/workspaces/*/forms/*/archive",
+                                "/v1/manage/workspaces/*/forms/*/restore").hasAuthority("admin")
+                        .requestMatchers(HttpMethod.GET, "/v1/manage/workspaces/*/**").hasAuthority("viewer")
+                        .requestMatchers("/v1/manage/workspaces/*/**").hasAuthority("editor")
                         .anyRequest().denyAll())
                 .build();
     }
@@ -194,7 +217,7 @@ public class SecurityConfig {
 
         static boolean isRuntimeWrite(HttpServletRequest request) {
             return !"GET".equals(request.getMethod()) && !"HEAD".equals(request.getMethod())
-                    && !"OPTIONS".equals(request.getMethod()) && request.getRequestURI().startsWith("/v1/forms/");
+                    && !"OPTIONS".equals(request.getMethod()) && request.getRequestURI().startsWith("/v1/w/");
         }
 
         @Override
@@ -281,9 +304,104 @@ public class SecurityConfig {
 
         private static void signIn(AdminPrincipal principal) {
             List<GrantedAuthority> authorities = new ArrayList<>();
-            ROLE_AUTHORITIES.getOrDefault(principal.role(), List.of()).forEach(a -> authorities.add(new SimpleGrantedAuthority(a)));
+            authorities.add(new SimpleGrantedAuthority(MEMBER));
+            if (principal.instanceAdmin()) {
+                authorities.add(new SimpleGrantedAuthority(INSTANCE_ADMIN));
+            }
             SecurityContextHolder.getContext()
                     .setAuthentication(UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities));
+        }
+    }
+
+    /**
+     * Resolves the workspace named in the URL ({@code /v1/w/{slug}/...},
+     * {@code /v1/manage/workspaces/{slug}/...}, {@code /v1/admin/workspaces/{slug}/...}), checks
+     * that the caller may act in it, and grants their role in it for this request.
+     *
+     * <ul>
+     *   <li>Public runtime: the workspace must exist and not be archived, else 404.
+     *   <li>Members get their membership role. The service token is an editor of its workspace on
+     *       {@code /v1/manage} only. Instance admins who are not members get the admin role on the
+     *       workspace itself, its members, invitations and audit log, and nothing on form data.
+     *   <li>Everyone else gets 404. Anonymous requests continue and are refused with 401.
+     *   <li>In an archived workspace every write is refused with 409 ({@code workspaceArchived}),
+     *       except updating the workspace itself (to restore it) and erasure requests.
+     * </ul>
+     */
+    static final class WorkspaceFilter extends OncePerRequestFilter {
+        private static final Pattern PATH = Pattern.compile("^/v1/(w|manage/workspaces|admin/workspaces)/([^/]+)(/.*)?$");
+        /** What an instance admin may manage in a workspace without being a member. */
+        private static final Pattern INSTANCE_ADMIN_PATHS = Pattern.compile("^(/members(/.*)?|/invitations(/.*)?|/audit)?$");
+        private static final Set<String> SAFE = Set.of("GET", "HEAD", "OPTIONS");
+
+        private final WorkspaceRepository workspaces;
+
+        WorkspaceFilter(WorkspaceRepository workspaces) {
+            this.workspaces = workspaces;
+        }
+
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException {
+            Matcher path = PATH.matcher(request.getRequestURI());
+            if (!path.matches()) {
+                chain.doFilter(request, response);
+                return;
+            }
+            String kind = path.group(1);
+            String rest = path.group(3) == null ? "" : path.group(3);
+            Optional<Workspace> found = workspaces.findBySlug(path.group(2));
+            if ("w".equals(kind)) {
+                if (found.isEmpty() || found.get().archived()) {
+                    reject(response, HttpStatus.NOT_FOUND, "notFound", "Not found.");
+                    return;
+                }
+                set(request, found.get(), null);
+                chain.doFilter(request, response);
+                return;
+            }
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth == null) {
+                chain.doFilter(request, response); // Refused with 401 by the authorization rules.
+                return;
+            }
+            String role = found.map(workspace -> role(auth, workspace, kind, rest)).orElse(null);
+            if (role == null) {
+                reject(response, HttpStatus.NOT_FOUND, "notFound", "Not found.");
+                return;
+            }
+            Workspace workspace = found.get();
+            // Restoring the workspace and erasure requests (a legal obligation) still work when archived.
+            boolean allowedWhenArchived = "admin/workspaces".equals(kind) && (rest.isEmpty() || "/erasure".equals(rest));
+            if (workspace.archived() && !SAFE.contains(request.getMethod()) && !allowedWhenArchived) {
+                reject(response, HttpStatus.CONFLICT, "workspaceArchived", "This workspace is archived. Restore it to make changes.");
+                return;
+            }
+            List<GrantedAuthority> authorities = new ArrayList<>(auth.getAuthorities());
+            ROLE_AUTHORITIES.get(role).forEach(a -> authorities.add(new SimpleGrantedAuthority(a)));
+            SecurityContextHolder.getContext().setAuthentication(
+                    UsernamePasswordAuthenticationToken.authenticated(auth.getPrincipal(), null, authorities));
+            set(request, workspace, role);
+            chain.doFilter(request, response);
+        }
+
+        /** The caller's role in the workspace for this request, or null when it has no access. */
+        private String role(Authentication auth, Workspace workspace, String kind, String rest) {
+            if (auth.getPrincipal() instanceof AdminPrincipal principal) {
+                Optional<String> member = workspaces.role(workspace.id(), principal.userId());
+                if (member.isPresent()) {
+                    return member.get();
+                }
+                return principal.instanceAdmin() && "admin/workspaces".equals(kind) && INSTANCE_ADMIN_PATHS.matcher(rest).matches()
+                        ? "admin" : null;
+            }
+            boolean service = auth.getAuthorities().stream().anyMatch(a -> SERVICE.equals(a.getAuthority()));
+            return service && "manage/workspaces".equals(kind) && SERVICE_WORKSPACE.equals(workspace.slug()) ? "editor" : null;
+        }
+
+        private static void set(HttpServletRequest request, Workspace workspace, String role) {
+            WorkspaceContext.set(request, new WorkspaceContext.Current(workspace.id(), workspace.slug(), workspace.name(),
+                    workspace.archived(), role));
         }
     }
 }

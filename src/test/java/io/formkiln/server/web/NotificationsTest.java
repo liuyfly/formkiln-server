@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.TestMembers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -89,18 +90,18 @@ class NotificationsTest {
             mailer.sent.clear();
         }
         mailer.failing = false;
-        mvc.perform(post("/v1/manage/forms/signup/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/signup/versions").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content(FORM))
                 .andExpect(status().isCreated());
     }
 
     private ResultActions configure(String settings) throws Exception {
-        return mvc.perform(put("/v1/manage/forms/signup/notifications").header("Authorization", TOKEN)
+        return mvc.perform(put("/v1/manage/workspaces/default/forms/signup/notifications").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(settings));
     }
 
     private void submit(String answers) throws Exception {
-        mvc.perform(post("/v1/forms/signup/submissions").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/v1/w/default/forms/signup/submissions").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": " + answers + "}"))
                 .andExpect(status().isCreated());
     }
@@ -113,7 +114,7 @@ class NotificationsTest {
 
     @Test
     void validatesAndAuditsSettings() throws Exception {
-        mvc.perform(get("/v1/manage/forms/signup/notifications").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/signup/notifications").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$.teamRecipients").isEmpty())
                 .andExpect(jsonPath("$.confirmationEnabled").value(false))
                 .andExpect(jsonPath("$.defaultConfirmationSubject").value("We received your response: {{form.title}}"));
@@ -127,7 +128,7 @@ class NotificationsTest {
                 .andExpect(jsonPath("$.teamRecipients.length()").value(1));
         assertThat(jdbc.sql("SELECT details::text FROM audit_log WHERE action = 'notifications.updated'").query(String.class).single())
                 .contains("\"teamRecipients\": 1").contains("\"resume\": true");
-        mvc.perform(put("/v1/manage/forms/signup/notifications").with(user("v").authorities(() -> "viewer"))
+        mvc.perform(put("/v1/manage/workspaces/default/forms/signup/notifications").with(TestMembers.member(jdbc, "viewer"))
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
     }
@@ -156,7 +157,7 @@ class NotificationsTest {
         assertThat(confirmation.subject()).isEqualTo("Hi Ada Bcc: x@evil.test");
         assertThat(confirmation.body()).startsWith("Plan: Professional\n").contains("Email: ada@example.com").doesNotContain("SECRET-123");
 
-        mvc.perform(get("/v1/manage/forms/signup/mail").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/signup/mail").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$.length()").value(3))
                 .andExpect(jsonPath("$[?(@.kind == 'confirmation')].recipient").value("a***@example.com"))
                 .andExpect(jsonPath("$[?(@.kind == 'confirmation')].status").value("sent"));
@@ -186,14 +187,14 @@ class NotificationsTest {
     }
 
     private String draft() throws Exception {
-        String body = mvc.perform(post("/v1/forms/signup/drafts").contentType(MediaType.APPLICATION_JSON)
+        String body = mvc.perform(post("/v1/w/default/forms/signup/drafts").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"name\": \"Ada\"}}"))
                 .andReturn().getResponse().getContentAsString();
         return (String) json.readValue(body, Map.class).get("token");
     }
 
     private ResultActions resume(String token, String email) throws Exception {
-        return mvc.perform(post("/v1/forms/signup/drafts/resume-link").header("Formkiln-Draft", token)
+        return mvc.perform(post("/v1/w/default/forms/signup/drafts/resume-link").header("Formkiln-Draft", token)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"email\": \"" + email + "\"}"));
     }
 
@@ -201,10 +202,10 @@ class NotificationsTest {
     void emailsALinkToContinueLater() throws Exception {
         String token = draft();
         resume(token, "ada@example.com").andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("resumeUnavailable"));
-        mvc.perform(get("/v1/forms/signup")).andExpect(jsonPath("$.resumeByEmail").value(false));
+        mvc.perform(get("/v1/w/default/forms/signup")).andExpect(jsonPath("$.resumeByEmail").value(false));
 
         configure("{\"resumeEnabled\": true}");
-        mvc.perform(get("/v1/forms/signup")).andExpect(jsonPath("$.resumeByEmail").value(true));
+        mvc.perform(get("/v1/w/default/forms/signup")).andExpect(jsonPath("$.resumeByEmail").value(true));
         resume(token, "nope").andExpect(status().isBadRequest());
         resume("wrong-token-123456", "ada@example.com").andExpect(status().isNotFound());
         for (int i = 0; i < 3; i++) {
@@ -214,15 +215,15 @@ class NotificationsTest {
         notifications.deliverDue();
         Mailer.Message link = sentTo("ada@example.com");
         assertThat(link.subject()).isEqualTo("Continue your form: Sign up");
-        assertThat(link.body()).contains("https://forms.test/f/signup#draft=" + token);
+        assertThat(link.body()).contains("https://forms.test/f/default/signup#draft=" + token);
 
         // Token forms are reopened by the embedding application, not by email.
-        mvc.perform(put("/v1/manage/forms/signup/access").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/signup/access").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"mode\": \"token\"}"));
-        String embed = (String) json.readValue(mvc.perform(post("/v1/manage/embed-tokens").header("Authorization", TOKEN)
+        String embed = (String) json.readValue(mvc.perform(post("/v1/manage/workspaces/default/embed-tokens").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"formKey\": \"signup\"}"))
                 .andReturn().getResponse().getContentAsString(), Map.class).get("token");
-        mvc.perform(post("/v1/forms/signup/drafts/resume-link").header("Authorization", "Bearer " + embed)
+        mvc.perform(post("/v1/w/default/forms/signup/drafts/resume-link").header("Authorization", "Bearer " + embed)
                         .header("Formkiln-Draft", token).contentType(MediaType.APPLICATION_JSON).content("{\"email\": \"ada@example.com\"}"))
                 .andExpect(status().isNotFound());
     }
@@ -230,13 +231,13 @@ class NotificationsTest {
     @Test
     void theConfirmationFieldFollowsARename() throws Exception {
         String withIds = FORM.replace("{\"type\": \"email\", \"key\": \"email\"", "{\"type\": \"email\", \"id\": \"e1\", \"key\": \"email\"");
-        mvc.perform(post("/v1/manage/forms/signup/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/signup/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(withIds)).andExpect(status().isCreated());
         configure("""
                 {"confirmationEnabled": true, "confirmationEmailField": "email"}
                 """).andExpect(status().isOk());
 
-        mvc.perform(post("/v1/manage/forms/signup/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/signup/versions").header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(withIds.replace("\"key\": \"email\"", "\"key\": \"contactEmail\"")))
                 .andExpect(status().isCreated());
