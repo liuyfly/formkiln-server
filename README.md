@@ -106,7 +106,7 @@ Viewers can read; editors (and the service token) can also write.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms?archived=false` | Forms with their latest version (`null` until published), access mode, submission count, `unpublishedChanges`, `retentionDays`, `folderId` and `archivedAt`. `archived=true` lists the archived forms instead |
+| `GET` | `/v1/manage/forms?archived=false` | Forms with their `title` (of the working copy, else of the latest version, in the form's default language), latest version (`null` until published), access mode, submission count, `unpublishedChanges`, `retentionDays`, `folderId` and `archivedAt`. `archived=true` lists the archived forms instead |
 | `POST` | `/v1/manage/forms/{key}/archive` | **Admin members only.** Hides the form and stops serving it (runtime `404`, no new versions: `409 formArchived`); versions, submissions, files and settings are kept |
 | `POST` | `/v1/manage/forms/{key}/restore` | **Admin members only.** Serves an archived form again |
 | `PUT` | `/v1/manage/forms/{key}/folder` | `{ folderId }` (`null`: top level) |
