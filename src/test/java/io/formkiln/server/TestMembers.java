@@ -28,6 +28,14 @@ public final class TestMembers {
         return member(jdbc, "default", role);
     }
 
+    /** A new instance admin who is also a member (admin) of {@code workspace}. */
+    public static RequestPostProcessor instanceAdminMemberOf(JdbcClient jdbc, String workspace) {
+        UUID id = account(jdbc, true);
+        jdbc.sql("INSERT INTO workspace_member (workspace_id, user_id, role) SELECT id, :user, 'admin' FROM workspace WHERE slug = :slug")
+                .param("user", id).param("slug", workspace).update();
+        return signedIn(jdbc, id);
+    }
+
     /** A new instance admin without memberships. */
     public static RequestPostProcessor instanceAdmin(JdbcClient jdbc) {
         return signedIn(jdbc, account(jdbc, true));

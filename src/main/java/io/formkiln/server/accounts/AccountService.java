@@ -9,6 +9,7 @@ import io.formkiln.server.accounts.AccountRepository.User;
 import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.workspaces.WorkspaceRepository;
 import io.formkiln.server.workspaces.WorkspaceRepository.Member;
+import io.formkiln.server.workspaces.WorkspaceRepository.AccessWindow;
 import io.formkiln.server.workspaces.WorkspaceRepository.Membership;
 import io.formkiln.server.workspaces.WorkspaceRepository.Workspace;
 import java.time.Clock;
@@ -92,9 +93,12 @@ public class AccountService {
     /** The authenticated account behind a session. */
     public record AdminPrincipal(UUID userId, String email, boolean instanceAdmin, UUID sessionId) {}
 
-    /** An account with the workspaces it belongs to. */
+    /**
+     * An account with the workspaces it belongs to and, for instance admins, the workspaces it may
+     * read now without being a member (break-glass access).
+     */
     public record UserView(String id, String email, String status, boolean instanceAdmin, Instant lastLoginAt, Instant createdAt,
-            List<Membership> workspaces) {}
+            List<Membership> workspaces, List<AccessWindow> access) {}
 
     /** A member of the request's workspace. */
     public record MemberView(String id, String email, String role, String status, Instant lastLoginAt, Instant addedAt) {
@@ -247,7 +251,8 @@ public class AccountService {
 
     private UserView view(User user) {
         return new UserView(user.id().toString(), user.email(), user.status(), user.instanceAdmin(), user.lastLoginAt(),
-                user.createdAt(), workspaces.membershipsOf(user.id()));
+                user.createdAt(), workspaces.membershipsOf(user.id()),
+                user.instanceAdmin() ? workspaces.activeAccessOf(user.id(), clock.instant()) : List.of());
     }
 
     private User requireUser(UUID id) {

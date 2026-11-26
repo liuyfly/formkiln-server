@@ -55,6 +55,7 @@ class WorkspaceSchemaTest {
     void setUp() {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         jdbc.sql("TRUNCATE form_working_copy, submission, form_version, form, form_folder, audit_log CASCADE").update();
+        jdbc.sql("DELETE FROM workspace_access").update();
         jdbc.sql("DELETE FROM workspace WHERE slug <> 'default'").update();
         defaultWorkspace = jdbc.sql("SELECT id FROM workspace WHERE slug = 'default'").query(UUID.class).single();
     }
