@@ -17,6 +17,9 @@ public class WorkingCopyRepository {
     public record StoredCopy(UUID formId, String documentJson, long revision, Integer baseVersion, Instant updatedAt,
             UUID updatedBy, String updatedByEmail) {}
 
+    /** Until workspaces are resolved per request, new forms go into the default workspace. */
+    static final String DEFAULT_WORKSPACE = "(SELECT id FROM workspace WHERE slug = 'default')";
+
     private final JdbcClient jdbc;
 
     public WorkingCopyRepository(JdbcClient jdbc) {
@@ -41,7 +44,7 @@ public class WorkingCopyRepository {
 
     /** Creates an unpublished form; empty when the key is taken. */
     public Optional<UUID> createForm(String key) {
-        return jdbc.sql("INSERT INTO form (key) VALUES (:key) ON CONFLICT (key) DO NOTHING RETURNING id")
+        return jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, " + DEFAULT_WORKSPACE + ") ON CONFLICT (workspace_id, key) DO NOTHING RETURNING id")
                 .param("key", key)
                 .query(UUID.class)
                 .optional();
@@ -69,8 +72,8 @@ public class WorkingCopyRepository {
     /** First save of a copy. Returns false when one exists already (a concurrent first save). */
     public boolean insert(UUID formId, String documentJson, Integer baseVersion, UUID updatedBy) {
         return jdbc.sql("""
-                        INSERT INTO form_working_copy (form_id, document, revision, base_version, updated_by)
-                        VALUES (:id, CAST(:document AS jsonb), nextval('form_working_copy_revision'), :base, :user)
+                        INSERT INTO form_working_copy (form_id, workspace_id, document, revision, base_version, updated_by)
+                        VALUES (:id, (SELECT workspace_id FROM form WHERE id = :id), CAST(:document AS jsonb), nextval('form_working_copy_revision'), :base, :user)
                         ON CONFLICT (form_id) DO NOTHING
                         """)
                 .param("id", formId)

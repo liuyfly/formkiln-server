@@ -65,8 +65,8 @@ public class PlatformRepository {
 
     public void insertDraft(UUID formId, byte[] tokenHash, byte[] data, Instant now, Instant expiresAt) {
         jdbc.sql("""
-                        INSERT INTO form_draft (form_id, token_hash, data, created_at, updated_at, expires_at)
-                        VALUES (:form, :hash, :data, :now, :now, :expires)
+                        INSERT INTO form_draft (form_id, workspace_id, token_hash, data, created_at, updated_at, expires_at)
+                        VALUES (:form, (SELECT workspace_id FROM form WHERE id = :form), :hash, :data, :now, :now, :expires)
                         """)
                 .param("form", formId)
                 .param("hash", tokenHash)
@@ -113,8 +113,8 @@ public class PlatformRepository {
     public void insertFile(UUID id, UUID formId, String fieldKey, String name, long size, String contentType, String storageKey,
             Instant now) {
         jdbc.sql("""
-                        INSERT INTO file_object (id, form_id, field_key, name, size, content_type, storage_key, created_at)
-                        VALUES (:id, :form, :field, :name, :size, :type, :key, :now)
+                        INSERT INTO file_object (id, form_id, workspace_id, field_key, name, size, content_type, storage_key, created_at)
+                        VALUES (:id, :form, (SELECT workspace_id FROM form WHERE id = :form), :field, :name, :size, :type, :key, :now)
                         """)
                 .param("id", id)
                 .param("form", formId)
@@ -180,7 +180,10 @@ public class PlatformRepository {
     }
 
     public UUID insertEndpoint(UUID formId, String url, byte[] secret) {
-        return jdbc.sql("INSERT INTO webhook_endpoint (form_id, url, secret) VALUES (:form, :url, :secret) RETURNING id")
+        return jdbc.sql("""
+                        INSERT INTO webhook_endpoint (form_id, workspace_id, url, secret)
+                        VALUES (:form, (SELECT workspace_id FROM form WHERE id = :form), :url, :secret) RETURNING id
+                        """)
                 .param("form", formId)
                 .param("url", url)
                 .param("secret", secret)
@@ -216,8 +219,8 @@ public class PlatformRepository {
 
     public void insertDelivery(UUID endpointId, UUID submissionId, String event, byte[] payload, Instant now) {
         jdbc.sql("""
-                        INSERT INTO webhook_delivery (endpoint_id, submission_id, event, payload, next_attempt_at, created_at)
-                        VALUES (:endpoint, :submission, :event, :payload, :now, :now)
+                        INSERT INTO webhook_delivery (endpoint_id, workspace_id, submission_id, event, payload, next_attempt_at, created_at)
+                        VALUES (:endpoint, (SELECT workspace_id FROM webhook_endpoint WHERE id = :endpoint), :submission, :event, :payload, :now, :now)
                         """)
                 .param("endpoint", endpointId)
                 .param("submission", submissionId)

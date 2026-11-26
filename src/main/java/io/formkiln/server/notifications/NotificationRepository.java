@@ -73,8 +73,8 @@ public class NotificationRepository {
     public void saveSettings(UUID formId, Settings settings, Instant now) {
         jdbc.sql("""
                         INSERT INTO form_notification_settings (form_id, team_recipients, team_include_answers, confirmation_enabled,
-                            confirmation_email_field, confirmation_subject, confirmation_body, resume_enabled, updated_at)
-                        VALUES (:id, CAST(:recipients AS jsonb), :include, :confirmation, :field, :subject, :body, :resume, :now)
+                            confirmation_email_field, confirmation_subject, confirmation_body, resume_enabled, updated_at, workspace_id)
+                        VALUES (:id, CAST(:recipients AS jsonb), :include, :confirmation, :field, :subject, :body, :resume, :now, (SELECT workspace_id FROM form WHERE id = :id))
                         ON CONFLICT (form_id) DO UPDATE SET
                             team_recipients = EXCLUDED.team_recipients, team_include_answers = EXCLUDED.team_include_answers,
                             confirmation_enabled = EXCLUDED.confirmation_enabled,
@@ -105,8 +105,9 @@ public class NotificationRepository {
 
     public void insert(UUID formId, String kind, UUID submissionId, UUID draftId, String recipientHint, byte[] payload, Instant now) {
         jdbc.sql("""
-                        INSERT INTO mail_outbox (form_id, kind, submission_id, draft_id, recipient_hint, payload, next_attempt_at, created_at)
-                        VALUES (:form, :kind, :submission, :draft, :hint, :payload, :now, :now)
+                        INSERT INTO mail_outbox (form_id, workspace_id, kind, submission_id, draft_id, recipient_hint, payload,
+                            next_attempt_at, created_at)
+                        VALUES (:form, COALESCE((SELECT workspace_id FROM form WHERE id = :form), (SELECT id FROM workspace WHERE slug = 'default')), :kind, :submission, :draft, :hint, :payload, :now, :now)
                         """)
                 .param("form", formId)
                 .param("kind", kind)
