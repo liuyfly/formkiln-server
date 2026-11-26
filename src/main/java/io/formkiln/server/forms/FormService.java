@@ -163,6 +163,7 @@ public class FormService {
      */
     @Transactional
     public PublishedForm publish(String key, JsonNode document) {
+        requireNotArchived(key);
         List<DefinitionError> errors = problems(key, document);
         if (!errors.isEmpty()) {
             throw new InvalidFormException(errors);
@@ -220,8 +221,33 @@ public class FormService {
     }
 
     @Transactional(readOnly = true)
-    public List<FormRepository.FormSummary> list() {
-        return repository.listForms();
+    public List<FormRepository.FormSummary> list(boolean archived) {
+        return repository.listForms(archived);
+    }
+
+    /**
+     * Archives a form: it leaves the form list and respondents can no longer open or submit it
+     * (its links answer 404), but its versions, submissions, files and settings are kept.
+     */
+    @Transactional
+    public void archive(String key) {
+        if (repository.setArchived(key, clock.instant()) == 0) {
+            throw new NotFoundException("Form " + key + " does not exist or is already archived");
+        }
+    }
+
+    /** Brings an archived form back, served again as before. */
+    @Transactional
+    public void restore(String key) {
+        if (repository.setArchived(key, null) == 0) {
+            throw new NotFoundException("Form " + key + " is not archived");
+        }
+    }
+
+    private void requireNotArchived(String key) {
+        if (platform.findForm(key).map(PlatformRepository.FormRow::archived).orElse(false)) {
+            throw new RuntimeException4xx(HttpStatus.CONFLICT, "formArchived", "This form is archived. Restore it first.");
+        }
     }
 
     // ---------------------------------------------------------------- runtime access
@@ -233,7 +259,8 @@ public class FormService {
     @Transactional(readOnly = true)
     public Access access(String key, String authorization) {
         PlatformRepository.FormRow form = platform.findForm(key)
-                .filter(row -> repository.findVersion(key, null).isPresent()) // Unpublished forms are not served.
+                // Unpublished and archived forms are not served.
+                .filter(row -> !row.archived() && repository.findVersion(key, null).isPresent())
                 .orElseThrow(() -> new NotFoundException("Form " + key + " is not published"));
         if ("public".equals(form.accessMode())) {
             return new Access(form.id(), form.accessMode(), null);
@@ -397,6 +424,9 @@ public class FormService {
     /** The respondent's receipt, for a valid receipt token; sensitive answers are left out. */
     @Transactional(readOnly = true)
     public byte[] receipt(String key, String token, String locale) {
+        if (platform.findForm(key).map(PlatformRepository.FormRow::archived).orElse(true)) {
+            throw new NotFoundException("Form " + key + " is not available");
+        }
         UUID id = receipts.verify(token, key)
                 .orElseThrow(() -> new RuntimeException4xx(HttpStatus.UNAUTHORIZED, "receiptExpired",
                         "This receipt link has expired."));

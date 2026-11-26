@@ -29,6 +29,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.util.LinkedHashMap;
+import org.springframework.web.bind.annotation.PatchMapping;
+import io.formkiln.server.forms.FolderService;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -82,6 +85,11 @@ public class FormApi {
 
     public record AccessRequest(String mode) {}
 
+    public record FolderRequest(String name) {}
+
+    /** {@code folderId} null moves the form to the top level. */
+    public record MoveRequest(UUID folderId) {}
+
     public record EmbedTokenRequest(String formKey, String subject, Long ttlSeconds) {}
 
     public record WebhookRequest(String url) {}
@@ -95,9 +103,10 @@ public class FormApi {
     private final PlatformRepository platform;
     private final SubmissionExport export;
     private final JsonMapper json;
+    private final FolderService folders;
 
     public FormApi(FormService forms, DraftService drafts, FileService files, WebhookService webhooks, EmbedTokens embedTokens,
-            AccountRepository audit, PlatformRepository platform, SubmissionExport export, JsonMapper json) {
+            AccountRepository audit, PlatformRepository platform, SubmissionExport export, JsonMapper json, FolderService folders) {
         this.forms = forms;
         this.drafts = drafts;
         this.files = files;
@@ -107,6 +116,7 @@ public class FormApi {
         this.platform = platform;
         this.export = export;
         this.json = json;
+        this.folders = folders;
     }
 
     @SuppressWarnings("unchecked")
@@ -239,9 +249,66 @@ public class FormApi {
 
     // ------------------------------------------------------------------ management (viewer reads, editor writes)
 
+    /** Active forms; {@code archived=true} lists the archived ones instead. */
     @GetMapping("/v1/manage/forms")
-    public List<FormSummary> listForms() {
-        return forms.list();
+    public List<FormSummary> listForms(@RequestParam(defaultValue = "false") boolean archived) {
+        return forms.list(archived);
+    }
+
+    /** Hides a form and stops serving it; its data is kept (admin only). */
+    @PostMapping("/v1/manage/forms/{key}/archive")
+    public Map<String, Object> archive(@PathVariable String key, HttpServletRequest request) {
+        forms.archive(key);
+        record("form.archived", key, null, request);
+        return Map.of("key", key, "archived", true);
+    }
+
+    /** Serves an archived form again (admin only). */
+    @PostMapping("/v1/manage/forms/{key}/restore")
+    public Map<String, Object> restore(@PathVariable String key, HttpServletRequest request) {
+        forms.restore(key);
+        record("form.restored", key, null, request);
+        return Map.of("key", key, "archived", false);
+    }
+
+    @PutMapping("/v1/manage/forms/{key}/folder")
+    public Map<String, Object> moveToFolder(@PathVariable String key, @RequestBody MoveRequest body, HttpServletRequest request) {
+        String folder = folders.moveForm(key, body.folderId());
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("folder", folder);
+        record("form.moved", key, details, request);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("key", key);
+        result.put("folderId", body.folderId());
+        return result;
+    }
+
+    // ------------------------------------------------------------------ folders
+
+    @GetMapping("/v1/manage/folders")
+    public List<FolderService.Folder> listFolders() {
+        return folders.list();
+    }
+
+    @PostMapping("/v1/manage/folders")
+    public ResponseEntity<FolderService.Folder> createFolder(@RequestBody FolderRequest body, HttpServletRequest request) {
+        FolderService.Folder folder = folders.create(body.name());
+        record("folder.created", folder.name(), Map.of("id", folder.id().toString()), request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(folder);
+    }
+
+    @PatchMapping("/v1/manage/folders/{id}")
+    public FolderService.Folder renameFolder(@PathVariable UUID id, @RequestBody FolderRequest body, HttpServletRequest request) {
+        FolderService.Folder folder = folders.rename(id, body.name());
+        record("folder.renamed", folder.name(), Map.of("id", id.toString()), request);
+        return folder;
+    }
+
+    @DeleteMapping("/v1/manage/folders/{id}")
+    public ResponseEntity<Void> deleteFolder(@PathVariable UUID id, HttpServletRequest request) {
+        String name = folders.delete(id);
+        record("folder.deleted", name, Map.of("id", id.toString()), request);
+        return ResponseEntity.noContent().build();
     }
 
     /** Publishes a new immutable version. The body is the form document. */
