@@ -15,7 +15,7 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class PlatformRepository {
 
-    public record FormRow(UUID id, String key, String accessMode) {}
+    public record FormRow(UUID id, String key, String accessMode, boolean archived) {}
 
     public record Draft(UUID id, UUID formId, byte[] data, Instant updatedAt, Instant expiresAt) {}
 
@@ -45,9 +45,10 @@ public class PlatformRepository {
     // ---------------------------------------------------------------- forms
 
     public Optional<FormRow> findForm(String key) {
-        return jdbc.sql("SELECT id, key, access_mode FROM form WHERE key = :key")
+        return jdbc.sql("SELECT id, key, access_mode, archived_at IS NOT NULL AS archived FROM form WHERE key = :key")
                 .param("key", key)
-                .query((rs, n) -> new FormRow(rs.getObject("id", UUID.class), rs.getString("key"), rs.getString("access_mode")))
+                .query((rs, n) -> new FormRow(rs.getObject("id", UUID.class), rs.getString("key"), rs.getString("access_mode"),
+                        rs.getBoolean("archived")))
                 .optional();
     }
 

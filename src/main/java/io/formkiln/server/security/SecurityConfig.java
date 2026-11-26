@@ -121,6 +121,9 @@ public class SecurityConfig {
                         .requestMatchers("/v1/admin/invitations", "/v1/admin/invitations/*", "/v1/admin/invitations/*/resend")
                                 .hasAuthority("admin")
                         .requestMatchers("/v1/admin/**").hasAuthority("viewer")
+                        // Archiving hides a form and stops serving it: members with the admin role only.
+                        .requestMatchers(HttpMethod.POST, "/v1/manage/forms/*/archive", "/v1/manage/forms/*/restore")
+                                .hasAuthority("admin")
                         .requestMatchers(HttpMethod.GET, "/v1/manage/**").hasAnyAuthority("viewer", SERVICE)
                         .requestMatchers("/v1/manage/**").hasAnyAuthority("editor", SERVICE)
                         .anyRequest().denyAll())

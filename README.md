@@ -106,7 +106,12 @@ Viewers can read; editors (and the service token) can also write.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms` | Forms with their latest version (`null` until published), access mode, submission count, `unpublishedChanges` and `retentionDays` |
+| `GET` | `/v1/manage/forms?archived=false` | Forms with their latest version (`null` until published), access mode, submission count, `unpublishedChanges`, `retentionDays`, `folderId` and `archivedAt`. `archived=true` lists the archived forms instead |
+| `POST` | `/v1/manage/forms/{key}/archive` | **Admin members only.** Hides the form and stops serving it (runtime `404`, no new versions: `409 formArchived`); versions, submissions, files and settings are kept |
+| `POST` | `/v1/manage/forms/{key}/restore` | **Admin members only.** Serves an archived form again |
+| `PUT` | `/v1/manage/forms/{key}/folder` | `{ folderId }` (`null`: top level) |
+| `GET` / `POST` | `/v1/manage/folders` | Folders (one level) with their count of active forms / `{ name }` → `201`. Names are unique ignoring case (`409 folderNameTaken`) |
+| `PATCH` / `DELETE` | `/v1/manage/folders/{id}` | Rename `{ name }` / delete. Only folders without active forms can be deleted (`409 folderNotEmpty`); archived forms in it move to the top level |
 | `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
 | `GET` | `/v1/manage/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
 | `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |

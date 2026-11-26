@@ -19,7 +19,7 @@ public class FormRepository {
     /** A summary row for listings. */
     /** A form; {@code latestVersion} and {@code latestPublishedAt} are null until it is published. */
     public record FormSummary(String key, String accessMode, Integer latestVersion, Instant latestPublishedAt, long submissionCount,
-            boolean unpublishedChanges, Integer retentionDays) {}
+            boolean unpublishedChanges, Integer retentionDays, UUID folderId, Instant archivedAt) {}
 
     /** A stored submission. */
     public record StoredSubmission(UUID id, int version, String dataJson, String outcome, Instant submittedAt, String subject) {}
@@ -83,19 +83,33 @@ public class FormRepository {
                 .optional();
     }
 
-    public List<FormSummary> listForms() {
+    /** Archives ({@code at} set) or restores ({@code at} null) a form; 0 when it is already so. */
+    public int setArchived(String key, Instant at) {
+        return jdbc.sql(at == null
+                        ? "UPDATE form SET archived_at = NULL WHERE key = :key AND archived_at IS NOT NULL"
+                        : "UPDATE form SET archived_at = :at WHERE key = :key AND archived_at IS NULL")
+                .param("key", key)
+                .param("at", at == null ? null : OffsetDateTime.ofInstant(at, java.time.ZoneOffset.UTC))
+                .update();
+    }
+
+    /** Active forms, or archived ones (newest archived first). */
+    public List<FormSummary> listForms(boolean archived) {
         return jdbc.sql("""
-                        SELECT f.key, f.access_mode, f.retention_days,
+                        SELECT f.key, f.access_mode, f.retention_days, f.folder_id, f.archived_at,
                                MAX(v.version) AS latest_version,
                                MAX(v.published_at) AS latest_published_at,
                                (SELECT COUNT(*) FROM submission s JOIN form_version sv ON sv.id = s.form_version_id
                                 WHERE sv.form_id = f.id) AS submission_count,
                                EXISTS (SELECT 1 FROM form_working_copy c WHERE c.form_id = f.id) AS unpublished_changes
                         FROM form f LEFT JOIN form_version v ON v.form_id = f.id
-                        GROUP BY f.id, f.key, f.access_mode, f.retention_days
-                        ORDER BY f.key
+                        WHERE (f.archived_at IS NOT NULL) = :archived
+                        GROUP BY f.id, f.key, f.access_mode, f.retention_days, f.folder_id, f.archived_at
+                        ORDER BY f.archived_at DESC NULLS LAST, f.key
                         """)
+                .param("archived", archived)
                 .query((rs, n) -> {
+                    OffsetDateTime archivedAt = rs.getObject("archived_at", OffsetDateTime.class);
                     OffsetDateTime published = rs.getObject("latest_published_at", OffsetDateTime.class);
                     return new FormSummary(
                             rs.getString("key"),
@@ -104,7 +118,9 @@ public class FormRepository {
                             published == null ? null : published.toInstant(),
                             rs.getLong("submission_count"),
                             rs.getBoolean("unpublished_changes"),
-                            (Integer) rs.getObject("retention_days"));
+                            (Integer) rs.getObject("retention_days"),
+                            rs.getObject("folder_id", UUID.class),
+                            archivedAt == null ? null : archivedAt.toInstant());
                 })
                 .list();
     }
