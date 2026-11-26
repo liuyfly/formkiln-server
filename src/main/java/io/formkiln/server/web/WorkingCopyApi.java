@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.tokens.ServiceTokenPrincipal;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.forms.FormService.PublishedForm;
 import io.formkiln.server.forms.WorkingCopyService.Actor;
@@ -51,7 +52,7 @@ public class WorkingCopyApi {
         if (auth != null && auth.getPrincipal() instanceof AdminPrincipal principal) {
             return new Actor("user", principal.userId(), request.getRemoteAddr());
         }
-        return new Actor("service", null, request.getRemoteAddr());
+        return new Actor("service", ServiceTokenPrincipal.currentId(), request.getRemoteAddr());
     }
 
     private static long revision(Long revision) {

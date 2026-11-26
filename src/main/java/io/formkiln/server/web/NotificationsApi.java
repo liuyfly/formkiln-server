@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.tokens.ServiceTokenPrincipal;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.notifications.NotificationRepository.Settings;
 import io.formkiln.server.notifications.NotificationService.MailView;
@@ -49,7 +50,7 @@ public class NotificationsApi {
     public SettingsView update(@PathVariable String key, @RequestBody SettingsRequest body, HttpServletRequest request) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         boolean member = auth != null && auth.getPrincipal() instanceof AdminPrincipal;
-        UUID actorId = member ? ((AdminPrincipal) auth.getPrincipal()).userId() : null;
+        UUID actorId = member ? ((AdminPrincipal) auth.getPrincipal()).userId() : ServiceTokenPrincipal.currentId();
         return notifications.update(key, body.toSettings(), member ? "user" : "service", actorId, request.getRemoteAddr());
     }
 

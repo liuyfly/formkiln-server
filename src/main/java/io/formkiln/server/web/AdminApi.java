@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.tokens.ServiceTokenService;
 import io.formkiln.server.accounts.AccountRepository.AuditEntry;
 import io.formkiln.server.accounts.AccountService.Actor;
 import io.formkiln.server.accounts.AccountService.AddResult;
@@ -72,13 +73,18 @@ public class AdminApi {
 
     public record AccessRequest(String reason) {}
 
+    public record ServiceTokenRequest(String name, String role, Integer expiresInDays) {}
+
     private final AccountService accounts;
     private final WorkspaceService workspaces;
+    private final ServiceTokenService serviceTokens;
     private final boolean secureCookie;
 
-    public AdminApi(AccountService accounts, WorkspaceService workspaces, @Value("${formkiln.cookie-secure:true}") boolean secureCookie) {
+    public AdminApi(AccountService accounts, WorkspaceService workspaces, ServiceTokenService serviceTokens,
+            @Value("${formkiln.cookie-secure:true}") boolean secureCookie) {
         this.accounts = accounts;
         this.workspaces = workspaces;
+        this.serviceTokens = serviceTokens;
         this.secureCookie = secureCookie;
     }
 
@@ -256,6 +262,26 @@ public class AdminApi {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant before,
             @RequestParam(defaultValue = "100") int limit) {
         return accounts.workspaceAuditLog(before, Math.clamp(limit, 1, 500));
+    }
+
+    @GetMapping("/v1/admin/workspaces/{workspace}/service-tokens")
+    public List<ServiceTokenService.TokenView> serviceTokens(@PathVariable String workspace) {
+        return serviceTokens.list();
+    }
+
+    /** Creates a token for automation; the response is the only time the token is shown. */
+    @PostMapping("/v1/admin/workspaces/{workspace}/service-tokens")
+    public ResponseEntity<ServiceTokenService.CreatedToken> createServiceToken(@AuthenticationPrincipal AdminPrincipal principal,
+            @PathVariable String workspace, @RequestBody ServiceTokenRequest body, HttpServletRequest request) {
+        return ResponseEntity.status(201)
+                .body(serviceTokens.create(actor(principal, request), body.name(), body.role(), body.expiresInDays()));
+    }
+
+    @DeleteMapping("/v1/admin/workspaces/{workspace}/service-tokens/{id}")
+    public ResponseEntity<Void> revokeServiceToken(@AuthenticationPrincipal AdminPrincipal principal,
+            @PathVariable String workspace, @PathVariable UUID id, HttpServletRequest request) {
+        serviceTokens.revoke(actor(principal, request), id);
+        return ResponseEntity.noContent().build();
     }
 
     // ---------------------------------------------------------------- instance administration
