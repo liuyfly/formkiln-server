@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import io.formkiln.server.TestMembers;
 import io.formkiln.server.TestcontainersConfiguration;
+import io.formkiln.server.accounts.Mailer;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -20,6 +21,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -33,8 +37,18 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** Teams cannot reach each other's data: every path under a workspace answers 404 to outsiders. */
 @SpringBootTest(properties = "formkiln.service-token=test-token")
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, WorkspaceIsolationTest.Mail.class})
 class WorkspaceIsolationTest {
+
+    /** Account emails (invitations, "you were added") are not sent anywhere in these tests. */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class Mail {
+        @Bean
+        @Primary
+        Mailer mailer() {
+            return message -> {};
+        }
+    }
 
     private static final String TOKEN = "Bearer test-token";
 
