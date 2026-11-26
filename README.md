@@ -66,8 +66,10 @@ trusts `X-Forwarded-For` from private-network proxies (`server.forward-headers-s
 ./gradlew build   # unit and integration tests; Testcontainers starts a throwaway PostgreSQL
 ```
 
-The expression engine is tested against the conformance cases of the pinned
-[`@formkiln/spec`](https://www.npmjs.com/package/@formkiln/spec) release, downloaded and verified during the build.
+The expression and validation engines are tested against the conformance cases of the form
+specification, taken from a pinned commit of
+[liuyfly/formkiln](https://github.com/liuyfly/formkiln/tree/main/packages/spec) and verified
+during the build (see [CONTRIBUTING.md](CONTRIBUTING.md#following-the-specification)).
 
 ### Docker image
 

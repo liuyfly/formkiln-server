@@ -34,20 +34,25 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/): `feat`, 
 
 ## Conformance suite
 
-The Java expression and validation engine must pass the conformance cases published in
-[`@formkiln/spec`](https://github.com/liuyfly/formkiln/tree/main/packages/spec/conformance).
+The Java expression and validation engine must pass the conformance cases of the form
+specification in [`liuyfly/formkiln`](https://github.com/liuyfly/formkiln/tree/main/packages/spec).
 Semantic changes start in that repository.
 
-The build downloads the spec package from npm and verifies it against the sha512 integrity pinned in
-`gradle.properties` (`formkilnSpecVersion`, `formkilnSpecIntegrity`). To move to a new spec release:
+### Following the specification
+
+The build takes `packages/spec` (JSON Schema, conformance cases, examples) from a pinned commit of
+liuyfly/formkiln and verifies a SHA-256 digest of the extracted files (`formkilnSpecCommit`,
+`formkilnSpecSha256` in `gradle.properties`). No npm release is needed: once a spec change is on
+formkiln's `main`, pin its commit here.
 
 ```bash
-npm view @formkiln/spec@<version> dist.integrity
+git -C ../formkiln fetch && python3 scripts/spec-digest.py ../formkiln origin/main
 ```
 
-Update both properties, then run `./gradlew test`.
+Copy both printed properties into `gradle.properties`, then run `./gradlew build`. The digest is
+computed from your own clone, so a tampered download fails the build.
 
-To test against an unpublished spec (for example while changing the conformance cases), point the build at a local
+To test against a spec that is not on `main` yet (for example while changing the conformance cases), point the build at a local
 checkout of the formkiln repository:
 
 ```bash

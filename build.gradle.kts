@@ -1,6 +1,5 @@
 import java.net.URI
 import java.security.MessageDigest
-import java.util.Base64
 import org.springframework.boot.gradle.plugin.SpringBootPlugin
 
 plugins {
@@ -54,27 +53,25 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-// Downloads the pinned @formkiln/spec tarball from npm and verifies its integrity.
-val specVersion = providers.gradleProperty("formkilnSpecVersion").get()
-val specIntegrity = providers.gradleProperty("formkilnSpecIntegrity").get()
-val specTarball = layout.buildDirectory.file("formkiln-spec/spec-$specVersion.tgz")
-val specDir = layout.buildDirectory.dir("formkiln-spec/$specVersion")
+// The form specification (JSON Schema, conformance cases, examples) comes from packages/spec of
+// liuyfly/formkiln at a pinned commit, verified by a SHA-256 digest of the extracted files. No npm
+// release is needed to follow a spec change: see CONTRIBUTING.md.
+val specCommit = providers.gradleProperty("formkilnSpecCommit").get()
+val specSha256 = providers.gradleProperty("formkilnSpecSha256").get()
+val specTarball = layout.buildDirectory.file("formkiln-spec/formkiln-$specCommit.tar.gz")
+val specDir = layout.buildDirectory.dir("formkiln-spec/$specCommit")
 
 val downloadSpec by tasks.registering {
-    description = "Downloads and verifies @formkiln/spec@$specVersion."
-    inputs.property("version", specVersion)
-    inputs.property("integrity", specIntegrity)
+    description = "Downloads liuyfly/formkiln at commit $specCommit."
+    inputs.property("commit", specCommit)
     outputs.file(specTarball)
     // Copy into locals so the action does not capture the build script (configuration cache).
-    val version = specVersion
-    val integrity = specIntegrity
+    val commit = specCommit
     val target = specTarball
     doLast {
-        val url = URI("https://registry.npmjs.org/@formkiln/spec/-/spec-$version.tgz").toURL()
+        check(Regex("[0-9a-f]{40}").matches(commit)) { "formkilnSpecCommit must be a full 40-character commit SHA" }
+        val url = URI("https://codeload.github.com/liuyfly/formkiln/tar.gz/$commit").toURL()
         val bytes = url.openStream().use { it.readAllBytes() }
-        val digest = MessageDigest.getInstance("SHA-512").digest(bytes)
-        val actual = "sha512-" + Base64.getEncoder().encodeToString(digest)
-        check(actual == integrity) { "Integrity mismatch for @formkiln/spec@$version: $actual" }
         target.get().asFile.apply {
             parentFile.mkdirs()
             writeBytes(bytes)
@@ -83,13 +80,35 @@ val downloadSpec by tasks.registering {
 }
 
 val extractSpec by tasks.registering(Sync::class) {
-    description = "Extracts @formkiln/spec@$specVersion for the conformance tests."
+    description = "Extracts and verifies packages/spec of liuyfly/formkiln at $specCommit."
     dependsOn(downloadSpec)
+    inputs.property("sha256", specSha256)
     from(tarTree(resources.gzip(specTarball))) {
-        eachFile { path = path.removePrefix("package/") }
+        include("*/packages/spec/schema/**", "*/packages/spec/conformance/**", "*/packages/spec/examples/**")
+        eachFile { path = path.substringAfter("/packages/spec/") }
         includeEmptyDirs = false
     }
     into(specDir)
+    val expected = specSha256
+    val dir = specDir
+    doLast {
+        // GitHub does not promise byte-identical archives, so the digest covers the files:
+        // SHA-256 over "<relative path>\n<SHA-256 of the file>\n", paths sorted.
+        val root = dir.get().asFile
+        val digest = MessageDigest.getInstance("SHA-256")
+        root.walkTopDown().filter { it.isFile }
+            .map { it.relativeTo(root).invariantSeparatorsPath to it }
+            .sortedBy { it.first }
+            .forEach { (path, file) ->
+                val fileHash = MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+                    .joinToString("") { "%02x".format(it) }
+                digest.update("$path\n$fileHash\n".toByteArray())
+            }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        check(actual == expected) {
+            "packages/spec at ${root.name} has digest $actual, expected $expected (formkilnSpecSha256)"
+        }
+    }
 }
 
 // -PformkilnSpecDir=../formkiln/packages/spec builds and tests against an unpublished local spec.
