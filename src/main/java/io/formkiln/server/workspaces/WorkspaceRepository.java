@@ -27,6 +27,9 @@ public class WorkspaceRepository {
     /** A workspace the account belongs to. */
     public record Membership(String slug, String name, String role, boolean archived) {}
 
+    /** A workspace an instance admin may read without being a member, until {@code expiresAt}. */
+    public record AccessWindow(String slug, String name, Instant expiresAt) {}
+
     /** A member of a workspace. */
     public record Member(UUID userId, String email, String role, String status, Instant lastLoginAt, Instant addedAt) {}
 
@@ -79,6 +82,44 @@ public class WorkspaceRepository {
     public void setArchived(UUID id, Instant at) {
         jdbc.sql("UPDATE workspace SET archived_at = :at WHERE id = :id")
                 .param("at", at == null ? null : OffsetDateTime.ofInstant(at, ZoneOffset.UTC)).param("id", id).update();
+    }
+
+    // ---------------------------------------------------------------- break-glass access
+
+    public void insertAccess(UUID workspaceId, UUID userId, String reason, Instant startedAt, Instant expiresAt) {
+        jdbc.sql("""
+                        INSERT INTO workspace_access (workspace_id, user_id, reason, started_at, expires_at)
+                        VALUES (:workspace, :user, :reason, :start, :end)
+                        """)
+                .param("workspace", workspaceId).param("user", userId).param("reason", reason)
+                .param("start", OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC))
+                .param("end", OffsetDateTime.ofInstant(expiresAt, ZoneOffset.UTC))
+                .update();
+    }
+
+    /** The end of the account's open access window to the workspace, if one is open at {@code now}. */
+    public Optional<Instant> activeAccess(UUID workspaceId, UUID userId, Instant now) {
+        return jdbc.sql("""
+                        SELECT expires_at FROM workspace_access
+                        WHERE workspace_id = :workspace AND user_id = :user AND expires_at > :now
+                        ORDER BY expires_at DESC LIMIT 1
+                        """)
+                .param("workspace", workspaceId).param("user", userId).param("now", OffsetDateTime.ofInstant(now, ZoneOffset.UTC))
+                .query((rs, n) -> instant(rs, "expires_at")).optional();
+    }
+
+    /** The account's open access windows. */
+    public List<AccessWindow> activeAccessOf(UUID userId, Instant now) {
+        return jdbc.sql("""
+                        SELECT w.slug, w.name, MAX(a.expires_at) AS expires_at
+                        FROM workspace_access a JOIN workspace w ON w.id = a.workspace_id
+                        WHERE a.user_id = :user AND a.expires_at > :now
+                        GROUP BY w.slug, w.name
+                        ORDER BY w.slug
+                        """)
+                .param("user", userId).param("now", OffsetDateTime.ofInstant(now, ZoneOffset.UTC))
+                .query((rs, n) -> new AccessWindow(rs.getString("slug"), rs.getString("name"), instant(rs, "expires_at")))
+                .list();
     }
 
     // ---------------------------------------------------------------- members

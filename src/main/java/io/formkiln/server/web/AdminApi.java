@@ -70,6 +70,8 @@ public class AdminApi {
 
     public record WorkspaceRequest(String slug, String name) {}
 
+    public record AccessRequest(String reason) {}
+
     private final AccountService accounts;
     private final WorkspaceService workspaces;
     private final boolean secureCookie;
@@ -273,6 +275,13 @@ public class AdminApi {
     public WorkspaceView updateAnyWorkspace(@AuthenticationPrincipal AdminPrincipal principal, @PathVariable String slug,
             @RequestBody WorkspaceService.Update body, HttpServletRequest request) {
         return workspaces.update(actor(principal, request), slug, body);
+    }
+
+    /** Break-glass: opens the workspace read-only for an hour, with a reason (audited in the workspace). */
+    @PostMapping("/v1/admin/instance/workspaces/{slug}/access")
+    public ResponseEntity<WorkspaceService.AccessGranted> openAccess(@AuthenticationPrincipal AdminPrincipal principal,
+            @PathVariable String slug, @RequestBody AccessRequest body, HttpServletRequest request) {
+        return ResponseEntity.status(201).body(workspaces.openAccess(actor(principal, request), slug, body.reason()));
     }
 
     @GetMapping("/v1/admin/instance/accounts")

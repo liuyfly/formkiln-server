@@ -37,7 +37,8 @@ First release.
   apart, and URLs name the workspace (`/v1/w/{workspace}/forms/{key}`,
   `/v1/manage/workspaces/{workspace}/...`). Form keys are unique per workspace.
 - Roles per workspace; outsiders get 404. Instance admins manage workspaces and accounts without
-  seeing form data. Archived workspaces are read-only and stop serving their forms.
+  seeing form data, except through an audited one-hour read-only window opened with a reason.
+  Archived workspaces are read-only and stop serving their forms.
 
 ### Accounts and security
 

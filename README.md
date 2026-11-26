@@ -96,7 +96,10 @@ one workspace, `default`.
 - Anyone who is not a member gets **404** for every path under a workspace, so responses never
   reveal that another team's workspace or form exists.
 - **Instance admins** create, rename and archive workspaces, manage accounts and the members of any
-  workspace, and read the instance-wide audit log. They do not see form data unless they are members.
+  workspace, and read the instance-wide audit log. They do not see form data unless they are members,
+  or open a **read-only access window** (break-glass): with a reason, for one hour, as a viewer
+  (writes `403 readOnlyAccess`). The reason and every read are recorded in the workspace's audit log
+  (`workspace.accessOpened`, `workspace.accessRead`).
 - An **archived** workspace is read-only for its members (writes: `409 workspaceArchived`) and its
   forms are no longer served (runtime `404`). Restoring it (`PATCH .../workspaces/{workspace}`) and
   erasure requests still work.
@@ -247,7 +250,7 @@ invitations.
 | `POST` | `/v1/admin/auth/mfa` | anyone | `{ challenge, code }` or `{ challenge, recoveryCode }`. Sets the session cookie, returns `{ user, recoveryCodes? }` |
 | `POST` | `/v1/admin/auth/password/forgot` | anyone | `{ email }` → `202`, whether or not the email exists |
 | `POST` | `/v1/admin/auth/password/reset` | link holder | `{ token, password }` |
-| `GET` | `/v1/admin/auth/me` | member | The signed-in account: `{ id, email, status, instanceAdmin, lastLoginAt, createdAt, workspaces: [{ slug, name, role, archived }] }` |
+| `GET` | `/v1/admin/auth/me` | member | The signed-in account: `{ id, email, status, instanceAdmin, lastLoginAt, createdAt, workspaces: [{ slug, name, role, archived }], access: [{ slug, name, expiresAt }] }` (`access`: open read-only windows) |
 | `POST` | `/v1/admin/auth/logout` | member | Ends the session |
 | `POST` | `/v1/admin/me/password` | member | `{ currentPassword, newPassword }` |
 | `POST` | `/v1/admin/me/recovery-codes` | member | `{ code }` → new recovery codes |
@@ -261,6 +264,7 @@ invitations.
 | `GET` | `/v1/admin/workspaces/{workspace}/audit?limit=100&before=<at>` | workspace admin, instance admin | The workspace's audit log, newest first |
 | `GET` / `POST` | `/v1/admin/instance/workspaces` | instance admin | All workspaces with member and form counts; create `{ slug, name }` |
 | `PATCH` | `/v1/admin/instance/workspaces/{slug}` | instance admin | `{ name?, archived? }` |
+| `POST` | `/v1/admin/instance/workspaces/{slug}/access` | instance admin (not a member) | `{ reason }` (10 to 500 characters) → `201 { workspace, expiresAt }`: read-only access to the workspace's forms and submissions for one hour (`409 alreadyMember`) |
 | `GET` | `/v1/admin/instance/accounts` | instance admin | Every account with its workspaces |
 | `PATCH` | `/v1/admin/instance/accounts/{id}` | instance admin | `{ status? (active, disabled), instanceAdmin? }` |
 | `POST` | `/v1/admin/instance/accounts/{id}/reset-totp` | instance admin | The account enrolls a new authenticator at next login |

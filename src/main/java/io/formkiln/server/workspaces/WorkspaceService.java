@@ -31,6 +31,12 @@ public class WorkspaceService {
         }
     }
 
+    /** How long a break-glass access window stays open. */
+    public static final java.time.Duration ACCESS_WINDOW = java.time.Duration.ofHours(1);
+
+    /** An open break-glass access window. */
+    public record AccessGranted(String workspace, java.time.Instant expiresAt) {}
+
     /** Changes to a workspace; null fields stay as they are. */
     public record Update(String name, Boolean archived) {}
 
@@ -101,6 +107,29 @@ public class WorkspaceService {
             record(workspace.id(), actor, update.archived() ? "workspace.archived" : "workspace.restored", slug, null);
         }
         return WorkspaceView.of(repository.findById(workspace.id()).orElseThrow());
+    }
+
+    /**
+     * Opens the workspace {@code slug} read-only for an instance admin who is not a member, for
+     * {@link #ACCESS_WINDOW}. The reason is recorded in the workspace's audit log, so its admins
+     * see who looked and why.
+     */
+    @Transactional
+    public AccessGranted openAccess(Actor actor, String slug, String reason) {
+        Workspace workspace = repository.findBySlug(slug).orElseThrow(WorkspaceService::notFound);
+        String clean = reason == null ? "" : reason.strip();
+        if (clean.length() < 10 || clean.length() > 500) {
+            throw new RuntimeException4xx(HttpStatus.BAD_REQUEST, "reasonRequired",
+                    "Explain in 10 to 500 characters why you need to read this workspace's data.");
+        }
+        if (repository.role(workspace.id(), actor.id()).isPresent()) {
+            throw new RuntimeException4xx(HttpStatus.CONFLICT, "alreadyMember", "You are a member of this workspace already.");
+        }
+        java.time.Instant now = clock.instant();
+        java.time.Instant until = now.plus(ACCESS_WINDOW);
+        repository.insertAccess(workspace.id(), actor.id(), clean, now, until);
+        record(workspace.id(), actor, "workspace.accessOpened", slug, Map.of("reason", clean, "expiresAt", until.toString()));
+        return new AccessGranted(slug, until);
     }
 
     @Transactional(readOnly = true)

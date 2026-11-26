@@ -1,5 +1,6 @@
 package io.formkiln.server.security;
 
+import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.accounts.AccountService;
 import io.formkiln.server.accounts.AccountService.AdminPrincipal;
 import io.formkiln.server.web.AdminApi;
@@ -106,6 +107,8 @@ public class SecurityConfig {
             HttpSecurity http,
             AccountService accounts,
             WorkspaceRepository workspaces,
+            AccountRepository audit,
+            Clock clock,
             @Value("${formkiln.service-token:}") String serviceToken,
             @Value("${formkiln.metrics-token:}") String metricsToken,
             @Value("${formkiln.auth-rate-limit:20}") int authRateLimit,
@@ -125,7 +128,7 @@ public class SecurityConfig {
                         "Too many requests. Try again later."), BasicAuthenticationFilter.class)
                 .addFilterBefore(new ServiceTokenFilter(serviceToken, metricsToken), BasicAuthenticationFilter.class)
                 .addFilterBefore(new SessionFilter(accounts), BasicAuthenticationFilter.class)
-                .addFilterBefore(new WorkspaceFilter(workspaces), BasicAuthenticationFilter.class)
+                .addFilterBefore(new WorkspaceFilter(workspaces, audit, clock), BasicAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         // Streaming responses (CSV export) finish on an async dispatch of a request
                         // that was already authorized.
@@ -322,7 +325,9 @@ public class SecurityConfig {
      *   <li>Public runtime: the workspace must exist and not be archived, else 404.
      *   <li>Members get their membership role. The service token is an editor of its workspace on
      *       {@code /v1/manage} only. Instance admins who are not members get the admin role on the
-     *       workspace itself, its members, invitations and audit log, and nothing on form data.
+     *       workspace itself, its members, invitations and audit log. Form data they read only
+     *       during a break-glass access window: as viewers, every write refused with 403
+     *       ({@code readOnlyAccess}) and every read recorded in the workspace's audit log.
      *   <li>Everyone else gets 404. Anonymous requests continue and are refused with 401.
      *   <li>In an archived workspace every write is refused with 409 ({@code workspaceArchived}),
      *       except updating the workspace itself (to restore it) and erasure requests.
@@ -334,10 +339,17 @@ public class SecurityConfig {
         private static final Pattern INSTANCE_ADMIN_PATHS = Pattern.compile("^(/members(/.*)?|/invitations(/.*)?|/audit)?$");
         private static final Set<String> SAFE = Set.of("GET", "HEAD", "OPTIONS");
 
-        private final WorkspaceRepository workspaces;
+        /** The caller's role for this request; {@code breakGlass} for an instance admin's read-only window. */
+        private record Access(String role, boolean breakGlass) {}
 
-        WorkspaceFilter(WorkspaceRepository workspaces) {
+        private final WorkspaceRepository workspaces;
+        private final AccountRepository audit;
+        private final Clock clock;
+
+        WorkspaceFilter(WorkspaceRepository workspaces, AccountRepository audit, Clock clock) {
             this.workspaces = workspaces;
+            this.audit = audit;
+            this.clock = clock;
         }
 
         @Override
@@ -365,7 +377,8 @@ public class SecurityConfig {
                 chain.doFilter(request, response); // Refused with 401 by the authorization rules.
                 return;
             }
-            String role = found.map(workspace -> role(auth, workspace, kind, rest)).orElse(null);
+            Access access = found.map(workspace -> access(auth, workspace, kind, rest)).orElse(null);
+            String role = access == null ? null : access.role();
             if (role == null) {
                 reject(response, HttpStatus.NOT_FOUND, "notFound", "Not found.");
                 return;
@@ -377,6 +390,16 @@ public class SecurityConfig {
                 reject(response, HttpStatus.CONFLICT, "workspaceArchived", "This workspace is archived. Restore it to make changes.");
                 return;
             }
+            if (access.breakGlass()) {
+                if (!SAFE.contains(request.getMethod())) {
+                    reject(response, HttpStatus.FORBIDDEN, "readOnlyAccess", "Your access to this workspace is read-only.");
+                    return;
+                }
+                AdminPrincipal principal = (AdminPrincipal) auth.getPrincipal();
+                String target = request.getRequestURI() + (request.getQueryString() == null ? "" : "?" + request.getQueryString());
+                audit.auditIn(workspace.id(), "user", principal.userId(), "workspace.accessRead",
+                        target.length() > 254 ? target.substring(0, 254) : target, request.getRemoteAddr(), null);
+            }
             List<GrantedAuthority> authorities = new ArrayList<>(auth.getAuthorities());
             ROLE_AUTHORITIES.get(role).forEach(a -> authorities.add(new SimpleGrantedAuthority(a)));
             SecurityContextHolder.getContext().setAuthentication(
@@ -385,18 +408,26 @@ public class SecurityConfig {
             chain.doFilter(request, response);
         }
 
-        /** The caller's role in the workspace for this request, or null when it has no access. */
-        private String role(Authentication auth, Workspace workspace, String kind, String rest) {
+        /** The caller's access to the workspace for this request, or null when it has none. */
+        private Access access(Authentication auth, Workspace workspace, String kind, String rest) {
             if (auth.getPrincipal() instanceof AdminPrincipal principal) {
                 Optional<String> member = workspaces.role(workspace.id(), principal.userId());
                 if (member.isPresent()) {
-                    return member.get();
+                    return new Access(member.get(), false);
                 }
-                return principal.instanceAdmin() && "admin/workspaces".equals(kind) && INSTANCE_ADMIN_PATHS.matcher(rest).matches()
-                        ? "admin" : null;
+                if (!principal.instanceAdmin()) {
+                    return null;
+                }
+                if ("admin/workspaces".equals(kind) && INSTANCE_ADMIN_PATHS.matcher(rest).matches()) {
+                    return new Access("admin", false);
+                }
+                boolean open = "manage/workspaces".equals(kind)
+                        && workspaces.activeAccess(workspace.id(), principal.userId(), clock.instant()).isPresent();
+                return open ? new Access("viewer", true) : null;
             }
             boolean service = auth.getAuthorities().stream().anyMatch(a -> SERVICE.equals(a.getAuthority()));
-            return service && "manage/workspaces".equals(kind) && SERVICE_WORKSPACE.equals(workspace.slug()) ? "editor" : null;
+            return service && "manage/workspaces".equals(kind) && SERVICE_WORKSPACE.equals(workspace.slug())
+                    ? new Access("editor", false) : null;
         }
 
         private static void set(HttpServletRequest request, Workspace workspace, String role) {

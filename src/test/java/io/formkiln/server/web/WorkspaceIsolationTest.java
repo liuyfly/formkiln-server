@@ -93,6 +93,7 @@ class WorkspaceIsolationTest {
         jdbc.sql("TRUNCATE form_working_copy, submission, form_version, form, form_folder, audit_log CASCADE").update();
         jdbc.sql("DELETE FROM admin_invitation WHERE workspace_id IN (SELECT id FROM workspace WHERE slug <> 'default')").update();
         jdbc.sql("DELETE FROM workspace_member WHERE workspace_id IN (SELECT id FROM workspace WHERE slug <> 'default')").update();
+        jdbc.sql("DELETE FROM workspace_access").update();
         jdbc.sql("DELETE FROM workspace WHERE slug <> 'default'").update();
         jdbc.sql("INSERT INTO workspace (slug, name) VALUES ('hr', 'HR')").update();
         defaultEditor = TestMembers.member(jdbc, "default", "editor");
@@ -282,5 +283,45 @@ class WorkspaceIsolationTest {
                         """).query(String.class).single();
         mvc.perform(withJson(patch("/v1/admin/workspaces/hr/members/" + other), "{\"role\": \"viewer\"}").with(hrAdmin))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void instanceAdminsReadAWorkspaceOnlyThroughAnAuditedReadOnlyWindow() throws Exception {
+        RequestPostProcessor instanceAdmin = TestMembers.instanceAdmin(jdbc);
+        submit("hr", "onboarding", "ada@example.com").andExpect(status().isCreated());
+        String base = "/v1/manage/workspaces/hr/forms/onboarding";
+        mvc.perform(get(base + "/submissions").with(instanceAdmin)).andExpect(status().isNotFound());
+
+        mvc.perform(withJson(post("/v1/admin/instance/workspaces/hr/access"), "{\"reason\": \"short\"}").with(instanceAdmin))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("reasonRequired"));
+        mvc.perform(withJson(post("/v1/admin/instance/workspaces/hr/access"), "{\"reason\": \"Support ticket 4711: missing submission\"}")
+                .with(hrAdmin)).andExpect(status().isForbidden());
+        mvc.perform(withJson(post("/v1/admin/instance/workspaces/hr/access"), "{\"reason\": \"Support ticket 4711: missing submission\"}")
+                .with(instanceAdmin)).andExpect(status().isCreated()).andExpect(jsonPath("$.expiresAt").isNotEmpty());
+
+        // Reads work, as a viewer: no revealing, no writes, no erasure.
+        mvc.perform(get("/v1/manage/workspaces/hr/forms").with(instanceAdmin)).andExpect(status().isOk());
+        mvc.perform(get(base + "/submissions").with(instanceAdmin)).andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1)));
+        mvc.perform(get(base + "/submissions").param("reveal", "true").with(instanceAdmin)).andExpect(status().isForbidden());
+        publish("hr", "onboarding", "Changed", instanceAdmin).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("readOnlyAccess"));
+        mvc.perform(withJson(post("/v1/admin/workspaces/hr/erasure"), "{\"email\": \"ada@example.com\"}").with(instanceAdmin))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/v1/admin/auth/me").with(instanceAdmin)).andExpect(jsonPath("$.access[0].slug").value("hr"));
+
+        // The workspace's admins see who looked, why and at what.
+        mvc.perform(get("/v1/admin/workspaces/hr/audit").with(hrAdmin))
+                .andExpect(jsonPath("$[*].action").value(org.hamcrest.Matchers.hasItems("workspace.accessOpened", "workspace.accessRead")))
+                .andExpect(jsonPath("$[?(@.action == 'workspace.accessRead')].target")
+                        .value(org.hamcrest.Matchers.hasItem(base + "/submissions")));
+        // Other workspaces stay closed, and the window ends.
+        mvc.perform(get("/v1/manage/workspaces/default/forms").with(instanceAdmin)).andExpect(status().isNotFound());
+        jdbc.sql("UPDATE workspace_access SET expires_at = now() - interval '1 second'").update();
+        mvc.perform(get(base + "/submissions").with(instanceAdmin)).andExpect(status().isNotFound());
+
+        // Members do not need it.
+        mvc.perform(withJson(post("/v1/admin/instance/workspaces/default/access"), "{\"reason\": \"Looking at my own team\"}")
+                .with(TestMembers.instanceAdminMemberOf(jdbc, "default"))).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("alreadyMember"));
     }
 }
