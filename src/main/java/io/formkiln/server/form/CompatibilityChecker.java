@@ -3,6 +3,7 @@ package io.formkiln.server.form;
 import io.formkiln.server.form.FormModel.Kind;
 import io.formkiln.server.form.FormModel.Node;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -11,7 +12,9 @@ import java.util.Set;
 
 /**
  * Compares a new form definition with the published one and lists changes that affect existing
- * submissions or integrations: removed fields, changed value types and removed choice options.
+ * submissions or integrations: removed and renamed fields, changed value types and removed choice
+ * options. A field whose element id (Form Schema §5.6) reappears under another key is renamed, not
+ * removed: its answers keep their meaning, but integrations see a new name.
  */
 public final class CompatibilityChecker {
 
@@ -19,6 +22,7 @@ public final class CompatibilityChecker {
     public record Change(String kind, String path, Map<String, Object> detail) {}
 
     public static final String FIELD_REMOVED = "fieldRemoved";
+    public static final String FIELD_RENAMED = "fieldRenamed";
     public static final String TYPE_CHANGED = "typeChanged";
     public static final String OPTIONS_REMOVED = "optionsRemoved";
 
@@ -50,14 +54,25 @@ public final class CompatibilityChecker {
     public static List<Change> compare(Map<String, Object> published, Map<String, Object> next) {
         Map<String, Node> before = answers(published);
         Map<String, Node> after = answers(next);
+        Map<String, String> afterPathsById = new HashMap<>();
+        after.forEach((path, node) -> {
+            if (node.source.get("id") instanceof String id) {
+                afterPathsById.putIfAbsent(id, path);
+            }
+        });
         List<Change> changes = new ArrayList<>();
         for (Map.Entry<String, Node> entry : before.entrySet()) {
             String path = entry.getKey();
             Node old = entry.getValue();
             Node current = after.get(path);
             if (current == null) {
-                changes.add(new Change(FIELD_REMOVED, path, Map.of()));
-                continue;
+                String renamedTo = old.source.get("id") instanceof String id ? afterPathsById.get(id) : null;
+                if (renamedTo == null || before.containsKey(renamedTo)) {
+                    changes.add(new Change(FIELD_REMOVED, path, Map.of()));
+                    continue;
+                }
+                changes.add(new Change(FIELD_RENAMED, path, Map.of("to", renamedTo)));
+                current = after.get(renamedTo);
             }
             if (old.valueType != null && !old.valueType.equals(current.valueType)) {
                 Map<String, Object> detail = new LinkedHashMap<>();

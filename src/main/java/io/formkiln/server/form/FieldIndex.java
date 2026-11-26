@@ -28,6 +28,7 @@ public final class FieldIndex {
     private final Map<String, FileRule> fileFields = new HashMap<>();
     private final Map<String, String> repeaterOfFileField = new HashMap<>();
     private final List<String> answerKeys = new ArrayList<>();
+    private final Map<String, String> idsByKey = new HashMap<>();
     private final List<AnswerField> answerFields = new ArrayList<>();
 
     private FieldIndex() {}
@@ -40,6 +41,9 @@ public final class FieldIndex {
             if ((node.kind == Kind.FIELD || node.kind == Kind.REPEATER) && node.repeater == null
                     && !index.answerKeys.contains(node.key)) {
                 index.answerKeys.add(node.key);
+                if (node.source.get("id") instanceof String id) {
+                    index.idsByKey.put(node.key, id);
+                }
                 List<AnswerField> children = new ArrayList<>();
                 if (node.kind == Kind.REPEATER) {
                     for (Node child : FormModel.repeaterChildFields(node)) {
@@ -94,6 +98,11 @@ public final class FieldIndex {
     /** Top-level answer keys (fields and repeaters outside repeaters) in document order. */
     public List<String> answerKeys() {
         return answerKeys;
+    }
+
+    /** The element id (Form Schema §5.6) of a top-level answer key, if it has one. */
+    public Optional<String> idOf(String key) {
+        return Optional.ofNullable(idsByKey.get(key));
     }
 
     public Set<String> sensitiveTop() {

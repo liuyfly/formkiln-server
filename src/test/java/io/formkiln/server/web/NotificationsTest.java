@@ -226,4 +226,25 @@ class NotificationsTest {
                         .header("Formkiln-Draft", token).contentType(MediaType.APPLICATION_JSON).content("{\"email\": \"ada@example.com\"}"))
                 .andExpect(status().isNotFound());
     }
+
+    @Test
+    void theConfirmationFieldFollowsARename() throws Exception {
+        String withIds = FORM.replace("{\"type\": \"email\", \"key\": \"email\"", "{\"type\": \"email\", \"id\": \"e1\", \"key\": \"email\"");
+        mvc.perform(post("/v1/manage/forms/signup/versions").header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON).content(withIds)).andExpect(status().isCreated());
+        configure("""
+                {"confirmationEnabled": true, "confirmationEmailField": "email"}
+                """).andExpect(status().isOk());
+
+        mvc.perform(post("/v1/manage/forms/signup/versions").header("Authorization", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(withIds.replace("\"key\": \"email\"", "\"key\": \"contactEmail\"")))
+                .andExpect(status().isCreated());
+        assertThat(jdbc.sql("SELECT confirmation_email_field FROM form_notification_settings").query(String.class).single())
+                .isEqualTo("contactEmail");
+
+        submit("{\"name\": \"Ada\", \"contactEmail\": \"ada@example.com\"}");
+        notifications.deliverDue();
+        assertThat(sentTo("ada@example.com")).isNotNull();
+    }
 }

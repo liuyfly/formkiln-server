@@ -125,6 +125,7 @@ public final class DefinitionValidator {
         checkKeys();
         checkOutcomeKeys();
         checkWidths();
+        checkIds();
         for (Node node : model.nodes) {
             Scope scope = new Scope(node.repeater, false, 0);
             for (String property : List.of("visible", "required", "readOnly", "calculate")) {
@@ -159,6 +160,16 @@ public final class DefinitionValidator {
             Set<String> keys = node.repeater == null ? top : seen.computeIfAbsent(node.repeater, r -> new HashSet<>());
             if (!keys.add(node.key)) {
                 report(node.pointer + "/key", "duplicateKey");
+            }
+        }
+    }
+
+    /** Form Schema §5.6: element ids are unique in the document. */
+    private void checkIds() {
+        Set<String> seen = new HashSet<>();
+        for (Node node : model.nodes) {
+            if (node.kind != Kind.PAGE && node.source.get("id") instanceof String id && !seen.add(id)) {
+                report(node.pointer + "/id", "duplicateId");
             }
         }
     }

@@ -58,6 +58,18 @@ public class NotificationRepository {
                 .optional();
     }
 
+    /** Points the confirmation email at a renamed field (same element id, new key). */
+    public void renameConfirmationField(String formKey, String from, String to) {
+        jdbc.sql("""
+                        UPDATE form_notification_settings SET confirmation_email_field = :to
+                        WHERE confirmation_email_field = :from AND form_id = (SELECT id FROM form WHERE key = :key)
+                        """)
+                .param("to", to)
+                .param("from", from)
+                .param("key", formKey)
+                .update();
+    }
+
     public void saveSettings(UUID formId, Settings settings, Instant now) {
         jdbc.sql("""
                         INSERT INTO form_notification_settings (form_id, team_recipients, team_include_answers, confirmation_enabled,
