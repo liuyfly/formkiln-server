@@ -107,6 +107,12 @@ public class NotificationService {
         return platform.findForm(key).orElseThrow(() -> new NotFoundException("No form " + key));
     }
 
+    /** Follows a field renamed in a newly published version (Form Schema §5.6). */
+    @Transactional
+    public void fieldRenamed(String formKey, String from, String to) {
+        repository.renameConfirmationField(formKey, from, to);
+    }
+
     public Settings settingsOf(UUID formId) {
         return repository.findSettings(formId).orElse(Settings.DEFAULT);
     }

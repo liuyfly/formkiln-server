@@ -55,4 +55,30 @@ class CompatibilityCheckerTest {
                 new Change(CompatibilityChecker.FIELD_REMOVED, "pets.petName", Map.of()),
                 new Change(CompatibilityChecker.FIELD_REMOVED, "email", Map.of()));
     }
+
+    @Test
+    void aFieldWithTheSameIdUnderAnotherKeyIsRenamed() {
+        String before = """
+                {"type": "text", "id": "n1", "key": "name", "label": "Name"},
+                {"type": "repeater", "id": "r1", "key": "pets", "label": "Pets",
+                 "elements": [{"type": "text", "id": "p1", "key": "petName", "label": "Pet"}]},
+                {"type": "text", "id": "o1", "key": "old", "label": "Old"}
+                """;
+        String after = """
+                {"type": "number", "id": "n1", "key": "fullName", "label": "Name"},
+                {"type": "repeater", "id": "r1", "key": "pets", "label": "Pets",
+                 "elements": [{"type": "text", "id": "p1", "key": "animal", "label": "Pet"}]},
+                {"type": "text", "id": "x9", "key": "old", "label": "A new field reusing the key"}
+                """;
+        assertThat(CompatibilityChecker.compare(form(before), form(after))).containsExactly(
+                // Renamed, and its value type checked against the new key.
+                new Change(CompatibilityChecker.FIELD_RENAMED, "name", Map.of("to", "fullName")),
+                new Change(CompatibilityChecker.TYPE_CHANGED, "name", Map.of("from", "string", "to", "number")),
+                new Change(CompatibilityChecker.FIELD_RENAMED, "pets.petName", Map.of("to", "pets.animal")));
+        // Without ids, a rename is still a removal.
+        assertThat(CompatibilityChecker.compare(
+                form("{\"type\": \"text\", \"key\": \"name\", \"label\": \"Name\"}"),
+                form("{\"type\": \"text\", \"key\": \"fullName\", \"label\": \"Name\"}")))
+                .containsExactly(new Change(CompatibilityChecker.FIELD_REMOVED, "name", Map.of()));
+    }
 }

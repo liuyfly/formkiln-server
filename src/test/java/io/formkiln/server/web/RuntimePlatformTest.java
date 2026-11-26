@@ -520,4 +520,38 @@ class RuntimePlatformTest {
                     .andExpect(status().isBadRequest());
         }
     }
+
+    @Test
+    void exportKeepsARenamedFieldInOneColumn() throws Exception {
+        String v1 = """
+                {"schemaVersion": 1, "key": "renamed", "title": "Renamed",
+                 "pages": [{"key": "p", "elements": [
+                   {"type": "text", "id": "n1", "key": "name", "label": "Name"},
+                   {"type": "text", "key": "note", "label": "Note"}
+                 ]}],
+                 "submit": {"outcomes": [{"key": "done"}]}}
+                """;
+        mvc.perform(post("/v1/manage/forms/renamed/versions").header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON).content(v1)).andExpect(status().isCreated());
+        mvc.perform(post("/v1/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"answers\": {\"name\": \"Ada\", \"note\": \"first\"}}")).andExpect(status().isCreated());
+        // Version 2 renames name (same id) and adds an id to note (joined by key).
+        String v2 = v1.replace("\"key\": \"name\"", "\"key\": \"fullName\"")
+                .replace("{\"type\": \"text\", \"key\": \"note\"", "{\"type\": \"text\", \"id\": \"t1\", \"key\": \"note\"");
+        mvc.perform(post("/v1/manage/forms/renamed/versions").header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON).content(v2)).andExpect(status().isCreated());
+        mvc.perform(post("/v1/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"answers\": {\"fullName\": \"Grace\", \"note\": \"second\"}}")).andExpect(status().isCreated());
+
+        MvcResult started = mvc.perform(get("/v1/manage/forms/renamed/submissions/export").param("reveal", "false")
+                        .header("Authorization", TOKEN))
+                .andExpect(request().asyncStarted()).andReturn();
+        String csv = mvc.perform(asyncDispatch(started)).andExpect(status().isOk()).andReturn()
+                .getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String[] lines = csv.split("\r\n");
+        assertThat(lines[0]).isEqualTo("\uFEFFid,version,outcome,submittedAt,subject,fullName,note");
+        assertThat(lines).hasSize(3);
+        assertThat(lines[1]).endsWith(",Grace,second");
+        assertThat(lines[2]).endsWith(",Ada,first");
+    }
 }

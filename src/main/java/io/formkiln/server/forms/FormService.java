@@ -3,6 +3,8 @@ package io.formkiln.server.forms;
 import io.formkiln.server.accounts.AccountRepository;
 import io.formkiln.server.expression.Values;
 import io.formkiln.server.form.FieldIndex;
+import java.util.Optional;
+import io.formkiln.server.form.CompatibilityChecker;
 import io.formkiln.server.metrics.FormkilnMetrics;
 import io.formkiln.server.notifications.NotificationService;
 import io.formkiln.server.pdf.ReceiptTokens;
@@ -167,7 +169,13 @@ public class FormService {
         }
         Map<String, Object> definition = canonical(document);
         int schemaVersion = ((Double) definition.get("schemaVersion")).intValue();
-        return view(repository.publish(key, schemaVersion, json.writeValueAsString(document)));
+        Optional<StoredVersion> previous = repository.findVersion(key, null);
+        PublishedForm published = view(repository.publish(key, schemaVersion, json.writeValueAsString(document)));
+        // Settings that name a field follow its renames (same element id, Form Schema §5.6).
+        previous.ifPresent(before -> CompatibilityChecker.compare(canonical(before.definitionJson()), definition).stream()
+                .filter(change -> change.kind().equals(CompatibilityChecker.FIELD_RENAMED) && !change.path().contains("."))
+                .forEach(change -> notifications.fieldRenamed(key, change.path(), (String) change.detail().get("to"))));
+        return published;
     }
 
     /**

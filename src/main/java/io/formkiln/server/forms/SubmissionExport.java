@@ -17,10 +17,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.json.JsonMapper;
@@ -28,8 +26,9 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Exports the submissions of a form as CSV (RFC 4180, UTF-8 with BOM for spreadsheet apps).
  *
- * <p>Columns: {@code id, version, outcome, submittedAt, subject}, then the answer keys of the
- * latest version in document order, then keys that only older versions have. Sensitive values
+ * <p>Columns: {@code id, version, outcome, submittedAt, subject}, then the answers of the latest
+ * version in document order, then answers that only older versions have. A field renamed between
+ * versions (same element id, Form Schema §5.6) stays one column, titled with its newest key. Sensitive values
  * are masked unless revealed. Values that a spreadsheet would run as a formula are prefixed with
  * an apostrophe (CSV injection).
  */
@@ -69,16 +68,40 @@ public class SubmissionExport {
 
     public void write(Prepared export, OutputStream output) throws IOException {
         Map<Integer, FieldIndex> indexes = new HashMap<>();
-        Set<String> columns = new LinkedHashSet<>();
+        List<Column> columns = new ArrayList<>();
+        Map<String, Column> byId = new HashMap<>();
+        Map<String, Column> byKey = new HashMap<>();
         for (StoredVersion version : repository.listVersions(export.key())) { // Newest first.
             FieldIndex index = FieldIndex.of(canonical(version.definitionJson()));
             indexes.put(version.version(), index);
-            columns.addAll(index.answerKeys());
+            for (String key : index.answerKeys()) {
+                // One column per field across versions: by element id when it has one (a renamed
+                // field keeps its column, titled with its newest key), else by key.
+                String id = index.idOf(key).orElse(null);
+                Column column = id != null ? byId.get(id) : null;
+                if (column == null) {
+                    Column sameKey = byKey.get(key);
+                    boolean free = sameKey != null && !sameKey.keys.containsKey(version.version())
+                            && (id == null || sameKey.id == null);
+                    column = free ? sameKey : new Column(key, id);
+                    if (column != sameKey) {
+                        columns.add(column);
+                    }
+                }
+                column.keys.put(version.version(), key);
+                if (id != null && column.id == null) {
+                    column.id = id;
+                }
+                if (id != null) {
+                    byId.put(id, column);
+                }
+                byKey.put(key, column);
+            }
         }
         Writer writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
         writer.write('﻿');
         List<String> header = new ArrayList<>(META);
-        header.addAll(columns);
+        columns.forEach(column -> header.add(column.title));
         writeRow(writer, header.stream().map(h -> (Object) h).toList());
 
         Instant afterAt = null;
@@ -91,8 +114,9 @@ public class SubmissionExport {
                 Map<String, Object> data = export.reveal() ? submissionData.decrypt(stored, index) : submissionData.mask(stored, index);
                 List<Object> row = new ArrayList<>(List.of(s.id().toString(), s.version(), nullable(s.outcome()),
                         s.submittedAt().toString(), nullable(s.subject())));
-                for (String column : columns) {
-                    row.add(cellValue(data.get(column)));
+                for (Column column : columns) {
+                    String key = column.keys.get(s.version());
+                    row.add(key == null ? "" : cellValue(data.get(key)));
                 }
                 writeRow(writer, row);
             }
@@ -104,6 +128,18 @@ public class SubmissionExport {
             afterId = last.id();
         }
         writer.flush();
+    }
+
+    /** An export column: its title (newest key) and the key it has in each version. */
+    private static final class Column {
+        final String title;
+        String id;
+        final Map<Integer, String> keys = new HashMap<>();
+
+        Column(String title, String id) {
+            this.title = title;
+            this.id = id;
+        }
     }
 
     private static Object nullable(String value) {
