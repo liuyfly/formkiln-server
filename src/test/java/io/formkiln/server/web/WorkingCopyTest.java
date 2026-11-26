@@ -233,4 +233,21 @@ class WorkingCopyTest {
                 .andExpect(status().isForbidden());
         mvc.perform(get("/v1/manage/forms/missing/working-copy").header("Authorization", TOKEN)).andExpect(status().isNotFound());
     }
+
+    @Test
+    void theFormListShowsTheTitleOfTheLatestEdits() throws Exception {
+        long revision = revision(create("survey"));
+        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+                .andExpect(jsonPath("$[?(@.key == 'survey')].title").value(hasItem("Survey")));
+
+        // A localized title in the form's default language; the working copy wins over the published version.
+        mvc.perform(post("/v1/manage/forms/survey/versions").header("Authorization", TOKEN)
+                .contentType(MediaType.APPLICATION_JSON).content(document("survey", FIELDS))).andExpect(status().isCreated());
+        String localized = document("survey", FIELDS)
+                .replace("\"title\": \"Survey\"",
+                        "\"title\": {\"en\": \"Customer survey\", \"zh-CN\": \"客户调查\"}, \"settings\": {\"defaultLocale\": \"zh-CN\"}");
+        save("survey", revision, localized).andExpect(status().isOk());
+        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+                .andExpect(jsonPath("$[?(@.key == 'survey')].title").value(hasItem("客户调查")));
+    }
 }

@@ -4,10 +4,12 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import tools.jackson.databind.json.JsonMapper;
 
 /** Persistence for forms, versions and submissions. JSON is stored as text in jsonb columns. */
 @Repository
@@ -18,16 +20,22 @@ public class FormRepository {
 
     /** A summary row for listings. */
     /** A form; {@code latestVersion} and {@code latestPublishedAt} are null until it is published. */
-    public record FormSummary(String key, String accessMode, Integer latestVersion, Instant latestPublishedAt, long submissionCount,
-            boolean unpublishedChanges, Integer retentionDays, UUID folderId, Instant archivedAt) {}
+    /**
+     * A form in the list. {@code title} is the title of the working copy (the latest edits) or else
+     * of the latest version, in the form's default language; null when there is neither.
+     */
+    public record FormSummary(String key, String title, String accessMode, Integer latestVersion, Instant latestPublishedAt,
+            long submissionCount, boolean unpublishedChanges, Integer retentionDays, UUID folderId, Instant archivedAt) {}
 
     /** A stored submission. */
     public record StoredSubmission(UUID id, int version, String dataJson, String outcome, Instant submittedAt, String subject) {}
 
     private final JdbcClient jdbc;
+    private final JsonMapper json;
 
-    public FormRepository(JdbcClient jdbc) {
+    public FormRepository(JdbcClient jdbc, JsonMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
     }
 
     private static Instant instant(OffsetDateTime value) {
@@ -83,6 +91,25 @@ public class FormRepository {
                 .optional();
     }
 
+    /** The title of a form document in its default language (a localized title: that language, else the first). */
+    @SuppressWarnings("unchecked")
+    private String title(String document) {
+        if (document == null) {
+            return null;
+        }
+        Map<String, Object> doc = json.readValue(document, Map.class);
+        Object title = doc.get("title");
+        if (title instanceof String text) {
+            return text;
+        }
+        if (title instanceof Map<?, ?> localized && !localized.isEmpty()) {
+            Object locale = doc.get("settings") instanceof Map<?, ?> settings ? settings.get("defaultLocale") : null;
+            Object text = localized.get(locale == null ? "en" : locale);
+            return String.valueOf(text != null ? text : localized.values().iterator().next());
+        }
+        return null;
+    }
+
     /** Archives ({@code at} set) or restores ({@code at} null) a form; 0 when it is already so. */
     public int setArchived(String key, Instant at) {
         return jdbc.sql(at == null
@@ -97,6 +124,11 @@ public class FormRepository {
     public List<FormSummary> listForms(boolean archived) {
         return jdbc.sql("""
                         SELECT f.key, f.access_mode, f.retention_days, f.folder_id, f.archived_at,
+                               COALESCE(
+                                   (SELECT c.document FROM form_working_copy c WHERE c.form_id = f.id),
+                                   (SELECT lv.definition FROM form_version lv WHERE lv.form_id = f.id
+                                    ORDER BY lv.version DESC LIMIT 1)
+                               )::text AS document,
                                MAX(v.version) AS latest_version,
                                MAX(v.published_at) AS latest_published_at,
                                (SELECT COUNT(*) FROM submission s JOIN form_version sv ON sv.id = s.form_version_id
@@ -113,6 +145,7 @@ public class FormRepository {
                     OffsetDateTime published = rs.getObject("latest_published_at", OffsetDateTime.class);
                     return new FormSummary(
                             rs.getString("key"),
+                            title(rs.getString("document")),
                             rs.getString("access_mode"),
                             (Integer) rs.getObject("latest_version"),
                             published == null ? null : published.toInstant(),
