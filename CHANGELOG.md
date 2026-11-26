@@ -31,12 +31,20 @@ First release.
 - CSV export, PDF per submission and a PDF receipt for the respondent.
 - Retention periods, deleting submissions and data-subject erasure requests with a dry run.
 
+### Workspaces
+
+- Teams work in separate workspaces: forms, folders, submissions, members and audit logs are kept
+  apart, and URLs name the workspace (`/v1/w/{workspace}/forms/{key}`,
+  `/v1/manage/workspaces/{workspace}/...`). Form keys are unique per workspace.
+- Roles per workspace; outsiders get 404. Instance admins manage workspaces and accounts without
+  seeing form data. Archived workspaces are read-only and stop serving their forms.
+
 ### Accounts and security
 
 - Invitation-only admin accounts: password (Argon2id) plus mandatory TOTP, recovery codes,
   password reset, session management, lockout after repeated failures. Each authenticator code
   is accepted once.
-- Roles (admin, editor, viewer), a service token for automation, and an audit log.
+- Roles (admin, editor, viewer) per workspace, a service token for automation, and an audit log.
 
 ### Operations
 

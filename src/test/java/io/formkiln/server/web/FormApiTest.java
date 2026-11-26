@@ -48,7 +48,7 @@ class FormApiTest {
     }
 
     private MockHttpServletRequestBuilder publish(String key, String body) {
-        return post("/v1/manage/forms/{key}/versions", key)
+        return post("/v1/manage/workspaces/default/forms/{key}/versions", key)
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body);
@@ -66,9 +66,9 @@ class FormApiTest {
 
     @Test
     void managementRequiresTheServiceToken() throws Exception {
-        mvc.perform(get("/v1/manage/forms")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/v1/manage/forms").header("Authorization", "Bearer wrong")).andExpect(status().isUnauthorized());
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN)).andExpect(status().isOk());
+        mvc.perform(get("/v1/manage/workspaces/default/forms")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", "Bearer wrong")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN)).andExpect(status().isOk());
     }
 
     @Test
@@ -80,11 +80,11 @@ class FormApiTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.version").value(2));
 
-        mvc.perform(get("/v1/forms/rentalApplication"))
+        mvc.perform(get("/v1/w/default/forms/rentalApplication"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.definition.key").value("rentalApplication"));
-        mvc.perform(get("/v1/manage/forms/rentalApplication/versions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/rentalApplication/versions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[*].version", contains(2, 1)));
     }
 
@@ -128,19 +128,19 @@ class FormApiTest {
         mvc.perform(publish("contact", minimalForm("contact", ", {\"type\": \"text\", \"key\": \"note\", \"label\": \"Note\"}")))
                 .andExpect(status().isCreated());
 
-        mvc.perform(post("/v1/forms/contact/submissions")
+        mvc.perform(post("/v1/w/default/forms/contact/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"name\": \"Ada\", \"note\": \"\", \"unknown\": 1}}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.outcome").value("done"));
 
-        mvc.perform(get("/v1/manage/forms/contact/submissions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/contact/submissions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].data.name").value("Ada"))
                 .andExpect(jsonPath("$[0].data.note").doesNotExist())
                 .andExpect(jsonPath("$[0].data.unknown").doesNotExist());
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].key").value("contact"))
                 .andExpect(jsonPath("$[0].submissionCount").value(1));
     }
@@ -148,20 +148,20 @@ class FormApiTest {
     @Test
     void rejectsInvalidAnswersWithErrors() throws Exception {
         mvc.perform(publish("contact", minimalForm("contact", ""))).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/contact/submissions")
+        mvc.perform(post("/v1/w/default/forms/contact/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"version\": 1, \"answers\": {\"name\": 42}}"))
                 .andExpect(status().isUnprocessableContent())
                 .andExpect(jsonPath("$.errors[0].path").value("name"))
                 .andExpect(jsonPath("$.errors[0].code").value("type"));
-        mvc.perform(get("/v1/manage/forms/contact/submissions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/contact/submissions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$", hasSize(0)));
     }
 
     @Test
     void validatesTheExampleAgainstTheReceiptTime() throws Exception {
         mvc.perform(publish("rentalApplication", example)).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/rentalApplication/submissions")
+        mvc.perform(post("/v1/w/default/forms/rentalApplication/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"dateOfBirth\": \"2099-01-01\"}}"))
                 .andExpect(status().isUnprocessableContent())
@@ -173,9 +173,9 @@ class FormApiTest {
 
     @Test
     void reportsUnknownFormsAndVersions() throws Exception {
-        mvc.perform(get("/v1/forms/missing")).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/w/default/forms/missing")).andExpect(status().isNotFound());
         mvc.perform(publish("contact", minimalForm("contact", ""))).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/contact/submissions")
+        mvc.perform(post("/v1/w/default/forms/contact/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"version\": 9, \"answers\": {}}"))
                 .andExpect(status().isNotFound());

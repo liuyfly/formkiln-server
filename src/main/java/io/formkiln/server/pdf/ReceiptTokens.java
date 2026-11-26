@@ -1,5 +1,6 @@
 package io.formkiln.server.pdf;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.accounts.Secrets;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -40,6 +41,7 @@ public class ReceiptTokens {
 
     public String issue(String formKey, UUID submissionId) {
         Map<String, Object> claims = new LinkedHashMap<>();
+        claims.put("w", WorkspaceContext.id().toString());
         claims.put("f", formKey);
         claims.put("s", submissionId.toString());
         claims.put("exp", clock.instant().plus(TTL).getEpochSecond());
@@ -64,7 +66,8 @@ public class ReceiptTokens {
             }
             Map<?, ?> claims = json.readValue(Base64.getUrlDecoder().decode(body), Map.class);
             Instant expires = Instant.ofEpochSecond(((Number) claims.get("exp")).longValue());
-            if (!formKey.equals(claims.get("f")) || !clock.instant().isBefore(expires)) {
+            if (!WorkspaceContext.id().toString().equals(claims.get("w")) || !formKey.equals(claims.get("f"))
+                    || !clock.instant().isBefore(expires)) {
                 return Optional.empty();
             }
             return Optional.of(UUID.fromString((String) claims.get("s")));

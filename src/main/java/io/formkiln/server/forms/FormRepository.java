@@ -1,5 +1,6 @@
 package io.formkiln.server.forms;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -44,11 +45,13 @@ public class FormRepository {
 
     /** Creates the form if needed and inserts the next version; returns the stored version. */
     public StoredVersion publish(String key, int schemaVersion, String definitionJson) {
-        jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, " + WorkingCopyRepository.DEFAULT_WORKSPACE
-                        + ") ON CONFLICT (workspace_id, key) DO NOTHING").param("key", key).update();
+        UUID workspace = WorkspaceContext.id();
+        jdbc.sql("INSERT INTO form (key, workspace_id) VALUES (:key, :ws) ON CONFLICT (workspace_id, key) DO NOTHING")
+                .param("key", key).param("ws", workspace).update();
         // Lock the form row so concurrent publishes get distinct version numbers.
-        UUID formId = jdbc.sql("SELECT id FROM form WHERE key = :key FOR UPDATE")
+        UUID formId = jdbc.sql("SELECT id FROM form WHERE key = :key AND workspace_id = :ws FOR UPDATE")
                 .param("key", key)
+                .param("ws", workspace)
                 .query(UUID.class)
                 .single();
         return jdbc.sql("""
@@ -76,11 +79,12 @@ public class FormRepository {
         return jdbc.sql("""
                         SELECT v.id, v.form_id, v.version, v.definition::text AS definition, v.published_at
                         FROM form_version v JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key AND (CAST(:version AS integer) IS NULL OR v.version = :version)
+                        WHERE f.key = :key AND f.workspace_id = :ws AND (CAST(:version AS integer) IS NULL OR v.version = :version)
                         ORDER BY v.version DESC
                         LIMIT 1
                         """)
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .param("version", version)
                 .query((rs, n) -> new StoredVersion(
                         rs.getObject("id", UUID.class),
@@ -114,9 +118,10 @@ public class FormRepository {
     /** Archives ({@code at} set) or restores ({@code at} null) a form; 0 when it is already so. */
     public int setArchived(String key, Instant at) {
         return jdbc.sql(at == null
-                        ? "UPDATE form SET archived_at = NULL WHERE key = :key AND archived_at IS NOT NULL"
-                        : "UPDATE form SET archived_at = :at WHERE key = :key AND archived_at IS NULL")
+                        ? "UPDATE form SET archived_at = NULL WHERE key = :key AND workspace_id = :ws AND archived_at IS NOT NULL"
+                        : "UPDATE form SET archived_at = :at WHERE key = :key AND workspace_id = :ws AND archived_at IS NULL")
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .param("at", at == null ? null : OffsetDateTime.ofInstant(at, java.time.ZoneOffset.UTC))
                 .update();
     }
@@ -136,10 +141,11 @@ public class FormRepository {
                                 WHERE sv.form_id = f.id) AS submission_count,
                                EXISTS (SELECT 1 FROM form_working_copy c WHERE c.form_id = f.id) AS unpublished_changes
                         FROM form f LEFT JOIN form_version v ON v.form_id = f.id
-                        WHERE (f.archived_at IS NOT NULL) = :archived
+                        WHERE f.workspace_id = :ws AND (f.archived_at IS NOT NULL) = :archived
                         GROUP BY f.id, f.key, f.access_mode, f.retention_days, f.folder_id, f.archived_at
                         ORDER BY f.archived_at DESC NULLS LAST, f.key
                         """)
+                .param("ws", WorkspaceContext.id())
                 .param("archived", archived)
                 .query((rs, n) -> {
                     OffsetDateTime archivedAt = rs.getObject("archived_at", OffsetDateTime.class);
@@ -160,13 +166,19 @@ public class FormRepository {
     }
 
     public List<StoredVersion> listVersions(String key) {
+        return listVersions(WorkspaceContext.id(), key);
+    }
+
+    /** The versions of a form of the given workspace (for work outside a request, such as a streamed export). */
+    public List<StoredVersion> listVersions(UUID workspace, String key) {
         return jdbc.sql("""
                         SELECT v.id, v.form_id, v.version, v.definition::text AS definition, v.published_at
                         FROM form_version v JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key
+                        WHERE f.key = :key AND f.workspace_id = :ws
                         ORDER BY v.version DESC
                         """)
                 .param("key", key)
+                .param("ws", workspace)
                 .query((rs, n) -> new StoredVersion(
                         rs.getObject("id", UUID.class),
                         rs.getObject("form_id", UUID.class),
@@ -214,7 +226,7 @@ public class FormRepository {
                         FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id
                         JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key
+                        WHERE f.key = :key AND f.workspace_id = :ws
                           AND (CAST(:before AS timestamptz) IS NULL
                                OR (CAST(:beforeId AS uuid) IS NULL AND s.submitted_at < CAST(:before AS timestamptz))
                                OR (s.submitted_at, s.id) < (CAST(:before AS timestamptz), CAST(:beforeId AS uuid)))
@@ -222,6 +234,7 @@ public class FormRepository {
                         LIMIT :limit
                         """)
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .param("before", before == null ? null : OffsetDateTime.ofInstant(before, ZoneOffset.UTC))
                 .param("beforeId", beforeId)
                 .param("limit", limit)
@@ -242,18 +255,19 @@ public class FormRepository {
      * ({@code afterAt}, {@code afterId}) exclusive. Used by the export, which must not skip rows
      * that share a submission time.
      */
-    public List<StoredSubmission> exportPage(String key, Instant afterAt, UUID afterId, int limit) {
+    public List<StoredSubmission> exportPage(UUID workspace, String key, Instant afterAt, UUID afterId, int limit) {
         return jdbc.sql("""
                         SELECT s.id, v.version, s.data::text AS data, s.outcome, s.submitted_at, s.subject
                         FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id
                         JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key
+                        WHERE f.key = :key AND f.workspace_id = :ws
                           AND (CAST(:at AS timestamptz) IS NULL OR (s.submitted_at, s.id) < (CAST(:at AS timestamptz), CAST(:id AS uuid)))
                         ORDER BY s.submitted_at DESC, s.id DESC
                         LIMIT :limit
                         """)
                 .param("key", key)
+                .param("ws", workspace)
                 .param("at", afterAt == null ? null : OffsetDateTime.ofInstant(afterAt, ZoneOffset.UTC))
                 .param("id", afterId)
                 .param("limit", limit)
@@ -275,9 +289,10 @@ public class FormRepository {
                         FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id
                         JOIN form f ON f.id = v.form_id
-                        WHERE f.key = :key AND s.id = :id
+                        WHERE f.key = :key AND f.workspace_id = :ws AND s.id = :id
                         """)
                 .param("key", key)
+                .param("ws", WorkspaceContext.id())
                 .param("id", id)
                 .query((rs, n) -> new ListedSubmission(
                         new StoredSubmission(

@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.TestMembers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
@@ -66,21 +67,21 @@ class WorkingCopyTest {
             """;
 
     private ResultActions create(String key) throws Exception {
-        return mvc.perform(post("/v1/manage/forms")
+        return mvc.perform(post("/v1/manage/workspaces/default/forms")
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"key\": \"" + key + "\", \"title\": \"Survey\"}"));
     }
 
     private ResultActions save(String key, long revision, String document) throws Exception {
-        return mvc.perform(put("/v1/manage/forms/{key}/working-copy", key)
+        return mvc.perform(put("/v1/manage/workspaces/default/forms/{key}/working-copy", key)
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"revision\": " + revision + ", \"document\": " + document + "}"));
     }
 
     private ResultActions publish(String key, long revision, boolean acknowledge) throws Exception {
-        return mvc.perform(post("/v1/manage/forms/{key}/working-copy/publish", key)
+        return mvc.perform(post("/v1/manage/workspaces/default/forms/{key}/working-copy/publish", key)
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"revision\": " + revision + ", \"acknowledgeChanges\": " + acknowledge + "}"));
@@ -101,15 +102,15 @@ class WorkingCopyTest {
         create("survey").andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("formExists"));
         create("Bad-Key").andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("invalidKey"));
 
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].key").value("survey"))
                 .andExpect(jsonPath("$[0].latestVersion").value(nullValue()))
                 .andExpect(jsonPath("$[0].unpublishedChanges").value(true));
         // Not served before it is published.
-        mvc.perform(get("/v1/forms/survey")).andExpect(status().isNotFound());
-        mvc.perform(post("/v1/forms/survey/drafts").contentType(MediaType.APPLICATION_JSON).content("{\"answers\": {}}"))
+        mvc.perform(get("/v1/w/default/forms/survey")).andExpect(status().isNotFound());
+        mvc.perform(post("/v1/w/default/forms/survey/drafts").contentType(MediaType.APPLICATION_JSON).content("{\"answers\": {}}"))
                 .andExpect(status().isNotFound());
-        mvc.perform(delete("/v1/manage/forms/survey/working-copy").header("Authorization", TOKEN))
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/survey/working-copy").header("Authorization", TOKEN))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("neverPublished"));
     }
@@ -130,14 +131,14 @@ class WorkingCopyTest {
         publish("survey", second, false).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("revisionConflict"));
         publish("survey", third, false).andExpect(status().isCreated()).andExpect(jsonPath("$.version").value(1));
 
-        mvc.perform(get("/v1/manage/forms/survey/working-copy").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/survey/working-copy").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$.revision").value(0))
                 .andExpect(jsonPath("$.baseVersion").value(1))
                 .andExpect(jsonPath("$.document.pages[0].elements", hasSize(2)));
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].latestVersion").value(1))
                 .andExpect(jsonPath("$[0].unpublishedChanges").value(false));
-        mvc.perform(get("/v1/forms/survey")).andExpect(status().isOk());
+        mvc.perform(get("/v1/w/default/forms/survey")).andExpect(status().isOk());
 
         // Revisions never repeat: a revision from before the publish cannot overwrite a new copy.
         long next = revision(save("survey", 0, document("survey", FIELDS)));
@@ -165,7 +166,7 @@ class WorkingCopyTest {
                 {"type": "radio", "key": "status", "label": "Status", "options": [{"value": "a", "label": "A"}]}
                 """);
         long next = revision(save("survey", 0, changed));
-        mvc.perform(get("/v1/manage/forms/survey/working-copy/check").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/survey/working-copy/check").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$.problems", hasSize(0)))
                 .andExpect(jsonPath("$.changes[*].kind", hasItem("typeChanged")))
                 .andExpect(jsonPath("$.changes[*].kind", hasItem("optionsRemoved")));
@@ -187,9 +188,9 @@ class WorkingCopyTest {
     void discardsBackToThePublishedVersion() throws Exception {
         publish("survey", revision(save("survey", revision(create("survey")), document("survey", FIELDS))), false);
         save("survey", 0, document("survey", "{\"type\": \"text\", \"key\": \"name\", \"label\": \"Name\"}"));
-        mvc.perform(delete("/v1/manage/forms/survey/working-copy").header("Authorization", TOKEN))
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/survey/working-copy").header("Authorization", TOKEN))
                 .andExpect(status().isNoContent());
-        mvc.perform(get("/v1/manage/forms/survey/working-copy").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/survey/working-copy").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$.revision").value(0))
                 .andExpect(jsonPath("$.document.pages[0].elements", hasSize(2)));
     }
@@ -197,7 +198,7 @@ class WorkingCopyTest {
     @Test
     void createsAFormFromADocument() throws Exception {
         String template = document("contactTemplate", FIELDS);
-        mvc.perform(post("/v1/manage/forms")
+        mvc.perform(post("/v1/manage/workspaces/default/forms")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"key\": \"contact\", \"title\": \"Contact us\", \"source\": \"template:contact\", \"document\": " + template + "}"))
@@ -208,13 +209,13 @@ class WorkingCopyTest {
                 .andExpect(jsonPath("$.problems", hasSize(0)));
         assertThat(jdbc.sql("SELECT details::text FROM audit_log WHERE action = 'form.created'").query(String.class).single())
                 .isEqualTo("{\"source\": \"template:contact\"}");
-        mvc.perform(post("/v1/manage/forms")
+        mvc.perform(post("/v1/manage/workspaces/default/forms")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"key\": \"other\", \"document\": [1]}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalidDocument"));
-        mvc.perform(post("/v1/manage/forms")
+        mvc.perform(post("/v1/manage/workspaces/default/forms")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"key\": \"other\", \"source\": \"<script>\"}"))
@@ -224,30 +225,30 @@ class WorkingCopyTest {
     @Test
     void viewersReadEditorsWrite() throws Exception {
         create("survey");
-        mvc.perform(get("/v1/manage/forms/survey/working-copy").with(user("v").authorities(() -> "viewer")))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/survey/working-copy").with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isOk());
-        mvc.perform(put("/v1/manage/forms/survey/working-copy")
-                        .with(user("v").authorities(() -> "viewer"))
+        mvc.perform(put("/v1/manage/workspaces/default/forms/survey/working-copy")
+                        .with(TestMembers.member(jdbc, "viewer"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"revision\": 1, \"document\": {}}"))
                 .andExpect(status().isForbidden());
-        mvc.perform(get("/v1/manage/forms/missing/working-copy").header("Authorization", TOKEN)).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/manage/workspaces/default/forms/missing/working-copy").header("Authorization", TOKEN)).andExpect(status().isNotFound());
     }
 
     @Test
     void theFormListShowsTheTitleOfTheLatestEdits() throws Exception {
         long revision = revision(create("survey"));
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[?(@.key == 'survey')].title").value(hasItem("Survey")));
 
         // A localized title in the form's default language; the working copy wins over the published version.
-        mvc.perform(post("/v1/manage/forms/survey/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/survey/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(document("survey", FIELDS))).andExpect(status().isCreated());
         String localized = document("survey", FIELDS)
                 .replace("\"title\": \"Survey\"",
                         "\"title\": {\"en\": \"Customer survey\", \"zh-CN\": \"客户调查\"}, \"settings\": {\"defaultLocale\": \"zh-CN\"}");
         save("survey", revision, localized).andExpect(status().isOk());
-        mvc.perform(get("/v1/manage/forms").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[?(@.key == 'survey')].title").value(hasItem("客户调查")));
     }
 }

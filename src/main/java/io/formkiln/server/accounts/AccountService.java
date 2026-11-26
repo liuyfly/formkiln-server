@@ -6,6 +6,11 @@ import io.formkiln.server.accounts.AccountRepository.Invitation;
 import io.formkiln.server.accounts.AccountRepository.Reset;
 import io.formkiln.server.accounts.AccountRepository.Session;
 import io.formkiln.server.accounts.AccountRepository.User;
+import io.formkiln.server.workspaces.WorkspaceContext;
+import io.formkiln.server.workspaces.WorkspaceRepository;
+import io.formkiln.server.workspaces.WorkspaceRepository.Member;
+import io.formkiln.server.workspaces.WorkspaceRepository.Membership;
+import io.formkiln.server.workspaces.WorkspaceRepository.Workspace;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,7 +32,11 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Invitation-only admin accounts: email + password (Argon2id) + mandatory TOTP, server-side
- * sessions, lockout, password reset, member management and an audit log.
+ * sessions, lockout, password reset, workspace members and an audit log.
+ *
+ * <p>Accounts are instance-wide; roles belong to workspace memberships. Methods about members and
+ * invitations act on the workspace of the request ({@link WorkspaceContext}); account-wide actions
+ * (disabling, resetting an authenticator, the instance admin flag) are for instance admins.
  */
 @Service
 public class AccountService {
@@ -80,14 +89,23 @@ public class AccountService {
         }
     }
 
-    /** The authenticated admin behind a session. */
-    public record AdminPrincipal(UUID userId, String email, String role, UUID sessionId) {}
+    /** The authenticated account behind a session. */
+    public record AdminPrincipal(UUID userId, String email, boolean instanceAdmin, UUID sessionId) {}
 
-    public record UserView(String id, String email, String role, String status, Instant lastLoginAt, Instant createdAt) {
-        static UserView of(User user) {
-            return new UserView(user.id().toString(), user.email(), user.role(), user.status(), user.lastLoginAt(), user.createdAt());
+    /** An account with the workspaces it belongs to. */
+    public record UserView(String id, String email, String status, boolean instanceAdmin, Instant lastLoginAt, Instant createdAt,
+            List<Membership> workspaces) {}
+
+    /** A member of the request's workspace. */
+    public record MemberView(String id, String email, String role, String status, Instant lastLoginAt, Instant addedAt) {
+        static MemberView of(Member member) {
+            return new MemberView(member.userId().toString(), member.email(), member.role(), member.status(), member.lastLoginAt(),
+                    member.addedAt());
         }
     }
+
+    /** Adding someone by email: an existing account becomes a member at once, a new one is invited. */
+    public record AddResult(String result, MemberView member, InvitationView invitation) {}
 
     public record InvitationView(String id, String email, String role, Instant createdAt, Instant expiresAt) {
         static InvitationView of(Invitation invitation) {
@@ -99,7 +117,7 @@ public class AccountService {
     /** TOTP enrollment material: show the URI as a QR code, or the secret for manual entry. */
     public record TotpEnrollment(String secret, String otpauthUri) {}
 
-    public record InvitationDetails(String email, String role, Instant expiresAt, TotpEnrollment totp) {}
+    public record InvitationDetails(String email, String workspace, String role, Instant expiresAt, TotpEnrollment totp) {}
 
     /** The first login step succeeded; {@code enrollTotp} is set when TOTP must be set up again. */
     public record LoginChallenge(String challenge, TotpEnrollment enrollTotp) {}
@@ -110,6 +128,7 @@ public class AccountService {
     public record SessionView(String id, Instant createdAt, Instant lastSeenAt, String ip, String userAgent, boolean current) {}
 
     private final AccountRepository repository;
+    private final WorkspaceRepository workspaces;
     private final Secrets secrets;
     private final Mailer mailer;
     private final Clock clock;
@@ -122,6 +141,7 @@ public class AccountService {
 
     public AccountService(
             AccountRepository repository,
+            WorkspaceRepository workspaces,
             Secrets secrets,
             Mailer mailer,
             Clock clock,
@@ -129,6 +149,7 @@ public class AccountService {
             @Value("${formkiln.admin-url}") String adminUrl,
             io.formkiln.server.metrics.FormkilnMetrics metrics) {
         this.repository = repository;
+        this.workspaces = workspaces;
         this.secrets = secrets;
         this.mailer = mailer;
         this.clock = clock;
@@ -217,67 +238,110 @@ public class AccountService {
         String token = Secrets.newToken();
         repository.insertSession(Secrets.hash(token), user.id(), now, now.plus(SESSION_MAX), truncate(ip, 64), truncate(userAgent, 256));
         repository.recordLoginSuccess(user.id(), now);
-        return new NewSession(token, UserView.of(repository.findUser(user.id()).orElseThrow()), recoveryCodes);
+        return new NewSession(token, view(repository.findUser(user.id()).orElseThrow()), recoveryCodes);
     }
 
     private static String truncate(String value, int max) {
         return value == null || value.length() <= max ? value : value.substring(0, max);
     }
 
-    private User requireUser(UUID id) {
-        return repository.lockUser(id).orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such member."));
+    private UserView view(User user) {
+        return new UserView(user.id().toString(), user.email(), user.status(), user.instanceAdmin(), user.lastLoginAt(),
+                user.createdAt(), workspaces.membershipsOf(user.id()));
     }
 
-    private void requireAnotherActiveAdmin(User target) {
-        if ("admin".equals(target.role()) && target.active() && repository.countActiveAdmins() <= 1) {
-            throw new AccountException(HttpStatus.CONFLICT, "lastAdmin", "There must always be at least one active admin.");
+    private User requireUser(UUID id) {
+        return repository.lockUser(id).orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such account."));
+    }
+
+    private void requireAnotherInstanceAdmin(User target) {
+        if (target.instanceAdmin() && target.active() && repository.countActiveInstanceAdmins() <= 1) {
+            throw new AccountException(HttpStatus.CONFLICT, "lastAdmin", "There must always be at least one active instance admin.");
         }
+    }
+
+    private static AccountException noSuchMember() {
+        return new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such member.");
+    }
+
+    private static AccountException noSuchInvitation() {
+        return new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such invitation.");
+    }
+
+    /** An open invitation of the request's workspace. */
+    private Invitation workspaceInvitation(UUID id) {
+        return repository.findOpenInvitation(id).filter(i -> i.workspaceId().equals(WorkspaceContext.id()))
+                .orElseThrow(AccountService::noSuchInvitation);
     }
 
     // ---------------------------------------------------------------- invitations
 
-    /** Creates an invitation (replacing any open one for the email) and emails the link. */
+    /**
+     * Adds {@code email} to the request's workspace: an existing account becomes a member at once
+     * (and is told by email), anyone else gets an invitation.
+     */
     @Transactional
-    public InvitationView invite(Actor actor, String email, String role) {
+    public AddResult addMember(Actor actor, String email, String role) {
         String normalized = normalizeEmail(email);
         checkRole(role);
-        if (repository.findUserByEmail(normalized).isPresent()) {
-            throw new AccountException(HttpStatus.CONFLICT, "memberExists", "This email already belongs to a member.");
+        Workspace workspace = workspaces.findById(WorkspaceContext.id()).orElseThrow();
+        Optional<User> existing = repository.findUserByEmail(normalized);
+        if (existing.isEmpty()) {
+            return new AddResult("invited", null, invite(actor, workspace, normalized, role, false));
         }
+        User user = existing.get();
+        if (!workspaces.insertMember(workspace.id(), user.id(), role, actor.id())) {
+            throw new AccountException(HttpStatus.CONFLICT, "memberExists", "This person is already a member of this workspace.");
+        }
+        mailer.send(new Mailer.Message(normalized, "You were added to " + workspace.name() + " on Formkiln", """
+                You were added to the workspace %s on Formkiln as %s.
+
+                Sign in: %s
+
+                If you did not expect this email, ask an admin of the workspace.
+                """.formatted(workspace.name(), role, adminUrl)));
+        audit(actor, "member.added", normalized, Map.of("role", role));
+        return new AddResult("added", MemberView.of(workspaces.lockMember(workspace.id(), user.id()).orElseThrow()), null);
+    }
+
+    /** Creates an invitation (replacing any open one for the email in the workspace) and emails the link. */
+    private InvitationView invite(Actor actor, Workspace workspace, String email, String role, boolean instanceAdmin) {
         Instant now = clock.instant();
-        repository.findOpenInvitationByEmail(normalized).ifPresent(open -> repository.revokeInvitation(open.id(), now));
+        repository.findOpenInvitationByEmail(workspace.id(), email).ifPresent(open -> repository.revokeInvitation(open.id(), now));
         String token = Secrets.newToken();
-        UUID id = repository.insertInvitation(normalized, role, Secrets.hash(token), actor.id(), now.plus(INVITATION_TTL));
-        mailer.send(new Mailer.Message(normalized, "You are invited to Formkiln", """
-                You have been invited to Formkiln as %s.
+        UUID id = repository.insertInvitation(email, workspace.id(), role, instanceAdmin, Secrets.hash(token), actor.id(),
+                now.plus(INVITATION_TTL));
+        mailer.send(new Mailer.Message(email, "You are invited to Formkiln", """
+                You have been invited to the workspace %s on Formkiln as %s.
 
                 Accept the invitation within 72 hours:
                 %s/invite#token=%s
 
                 If you did not expect this email, you can ignore it.
-                """.formatted(role, adminUrl, token)));
-        audit(actor, "invitation.created", normalized, Map.of("role", role));
+                """.formatted(workspace.name(), role, adminUrl, token)));
+        repository.auditIn(workspace.id(), actor.type(), actor.id(), "invitation.created", email, actor.ip(),
+                json.writeValueAsString(Map.of("role", role)));
+        metrics.accountAction("invitation.created");
         return InvitationView.of(repository.findOpenInvitation(id).orElseThrow());
     }
 
     @Transactional
     public InvitationView resendInvitation(Actor actor, UUID id) {
-        Invitation invitation = repository.findOpenInvitation(id)
-                .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such invitation."));
-        return invite(actor, invitation.email(), invitation.role());
+        Invitation invitation = workspaceInvitation(id);
+        return invite(actor, workspaces.findById(invitation.workspaceId()).orElseThrow(), invitation.email(), invitation.role(),
+                invitation.instanceAdmin());
     }
 
     @Transactional
     public void revokeInvitation(Actor actor, UUID id) {
-        Invitation invitation = repository.findOpenInvitation(id)
-                .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND, "notFound", "No such invitation."));
+        Invitation invitation = workspaceInvitation(id);
         repository.revokeInvitation(id, clock.instant());
         audit(actor, "invitation.revoked", invitation.email(), null);
     }
 
     @Transactional(readOnly = true)
     public List<InvitationView> openInvitations() {
-        return repository.listOpenInvitations().stream().map(InvitationView::of).toList();
+        return repository.listOpenInvitations(WorkspaceContext.id()).stream().map(InvitationView::of).toList();
     }
 
     private Invitation openInvitation(String token) {
@@ -302,7 +366,9 @@ public class AccountService {
         } else {
             secret = secrets.decrypt(invitation.totpSecret());
         }
-        return new InvitationDetails(invitation.email(), invitation.role(), invitation.expiresAt(), enrollment(invitation.email(), secret));
+        String workspace = workspaces.findById(invitation.workspaceId()).map(Workspace::name).orElse(null);
+        return new InvitationDetails(invitation.email(), workspace, invitation.role(), invitation.expiresAt(),
+                enrollment(invitation.email(), secret));
     }
 
     /** Creates the account: password plus a verified TOTP code. Signs the new member in. */
@@ -321,11 +387,24 @@ public class AccountService {
         if (repository.findUserByEmail(invitation.email()).isPresent()) {
             throw invalidToken();
         }
-        UUID userId = repository.insertUser(invitation.email(), passwords.encode(password), secrets.encrypt(secret), invitation.role());
+        Instant now = clock.instant();
+        UUID userId = repository.insertUser(invitation.email(), passwords.encode(password), secrets.encrypt(secret),
+                invitation.instanceAdmin());
         repository.useTotpStep(userId, step.getAsLong()); // The enrollment code cannot sign in again.
-        repository.acceptInvitation(invitation.id(), clock.instant());
+        // This invitation and any other open one for the address (other workspaces) become memberships.
+        for (Invitation open : repository.listOpenInvitationsFor(invitation.email())) {
+            if (open.id().equals(invitation.id()) || open.expiresAt().isAfter(now)) {
+                workspaces.insertMember(open.workspaceId(), userId, open.role(), open.invitedBy());
+                repository.acceptInvitation(open.id(), now);
+                repository.auditIn(open.workspaceId(), "user", userId, "invitation.accepted", open.email(), ip,
+                        json.writeValueAsString(Map.of("role", open.role())));
+            }
+        }
+        if (invitation.instanceAdmin()) {
+            repository.updateInstanceAdmin(userId, true);
+        }
+        metrics.accountAction("invitation.accepted");
         List<String> codes = newRecoveryCodes(userId);
-        audit(new Actor("user", userId, ip), "invitation.accepted", invitation.email(), Map.of("role", invitation.role()));
         return openSession(repository.findUser(userId).orElseThrow(), ip, userAgent, codes);
     }
 
@@ -336,11 +415,11 @@ public class AccountService {
             return false;
         }
         String normalized = normalizeEmail(email);
-        Optional<Invitation> open = repository.findOpenInvitationByEmail(normalized);
-        if (open.isPresent() && open.get().expiresAt().isAfter(clock.instant())) {
+        if (repository.hasOpenInvitation(normalized, clock.instant())) {
             return false;
         }
-        invite(Actor.system(), normalized, "admin");
+        // The first account: admin of the default workspace and instance admin.
+        invite(Actor.system(), workspaces.findBySlug("default").orElseThrow(), normalized, "admin", true);
         return true;
     }
 
@@ -462,7 +541,7 @@ public class AccountService {
         if (session.lastSeenAt().plus(TOUCH_INTERVAL).isBefore(now)) {
             repository.touchSession(session.id(), now);
         }
-        return Optional.of(new AdminPrincipal(user.get().id(), user.get().email(), user.get().role(), session.id()));
+        return Optional.of(new AdminPrincipal(user.get().id(), user.get().email(), user.get().instanceAdmin(), session.id()));
     }
 
     @Transactional
@@ -473,7 +552,7 @@ public class AccountService {
 
     @Transactional(readOnly = true)
     public UserView me(AdminPrincipal principal) {
-        return UserView.of(repository.findUser(principal.userId()).orElseThrow());
+        return view(repository.findUser(principal.userId()).orElseThrow());
     }
 
     // ---------------------------------------------------------------- passwords
@@ -573,28 +652,65 @@ public class AccountService {
         audit(new Actor("user", principal.userId(), ip), "session.revoked", principal.email(), Map.of("session", sessionId.toString()));
     }
 
-    // ---------------------------------------------------------------- members
+    // ---------------------------------------------------------------- workspace members
 
     @Transactional(readOnly = true)
-    public List<UserView> members() {
-        return repository.listUsers().stream().map(UserView::of).toList();
+    public List<MemberView> members() {
+        return workspaces.members(WorkspaceContext.id()).stream().map(MemberView::of).toList();
+    }
+
+    private void requireAnotherWorkspaceAdmin(UUID workspaceId, Member member) {
+        if ("admin".equals(member.role()) && "active".equals(member.status()) && workspaces.countAdmins(workspaceId) <= 1) {
+            throw new AccountException(HttpStatus.CONFLICT, "lastAdmin", "A workspace must always have at least one active admin.");
+        }
     }
 
     @Transactional
-    public UserView changeRole(Actor actor, UUID id, String role) {
+    public MemberView changeRole(Actor actor, UUID userId, String role) {
         checkRole(role);
-        User user = requireUser(id);
-        if (!role.equals(user.role())) {
+        UUID workspaceId = WorkspaceContext.id();
+        Member member = workspaces.lockMember(workspaceId, userId).orElseThrow(AccountService::noSuchMember);
+        if (!role.equals(member.role())) {
             if (!"admin".equals(role)) {
-                requireAnotherActiveAdmin(user);
+                requireAnotherWorkspaceAdmin(workspaceId, member);
             }
-            repository.updateRole(id, role);
-            audit(actor, "member.roleChanged", user.email(), Map.of("from", user.role(), "to", role));
+            workspaces.updateMemberRole(workspaceId, userId, role);
+            audit(actor, "member.roleChanged", member.email(), Map.of("from", member.role(), "to", role));
         }
-        return UserView.of(repository.findUser(id).orElseThrow());
+        return MemberView.of(workspaces.lockMember(workspaceId, userId).orElseThrow());
     }
 
-    /** Disables (signing out every session) or re-enables a member. */
+    /** Removes a member from the workspace. The account and its other memberships stay. */
+    @Transactional
+    public void removeMember(Actor actor, UUID userId) {
+        UUID workspaceId = WorkspaceContext.id();
+        Member member = workspaces.lockMember(workspaceId, userId).orElseThrow(AccountService::noSuchMember);
+        requireAnotherWorkspaceAdmin(workspaceId, member);
+        workspaces.deleteMember(workspaceId, userId);
+        audit(actor, "member.removed", member.email(), Map.of("role", member.role()));
+    }
+
+    // ---------------------------------------------------------------- accounts (instance admins)
+
+    @Transactional(readOnly = true)
+    public List<UserView> accounts() {
+        return repository.listUsers().stream().map(this::view).toList();
+    }
+
+    @Transactional
+    public UserView setInstanceAdmin(Actor actor, UUID id, boolean instanceAdmin) {
+        User user = requireUser(id);
+        if (instanceAdmin != user.instanceAdmin()) {
+            if (!instanceAdmin) {
+                requireAnotherInstanceAdmin(user);
+            }
+            repository.updateInstanceAdmin(id, instanceAdmin);
+            audit(actor, instanceAdmin ? "account.instanceAdminGranted" : "account.instanceAdminRevoked", user.email(), null);
+        }
+        return view(repository.findUser(id).orElseThrow());
+    }
+
+    /** Disables (signing out every session) or re-enables an account. */
     @Transactional
     public UserView changeStatus(Actor actor, UUID id, String status) {
         if (!"active".equals(status) && !"disabled".equals(status)) {
@@ -603,16 +719,16 @@ public class AccountService {
         User user = requireUser(id);
         if (!status.equals(user.status())) {
             if ("disabled".equals(status)) {
-                requireAnotherActiveAdmin(user);
+                requireAnotherInstanceAdmin(user);
                 repository.revokeUserSessions(id, null, clock.instant());
             }
             repository.updateStatus(id, status);
-            audit(actor, "disabled".equals(status) ? "member.disabled" : "member.enabled", user.email(), null);
+            audit(actor, "disabled".equals(status) ? "account.disabled" : "account.enabled", user.email(), null);
         }
-        return UserView.of(repository.findUser(id).orElseThrow());
+        return view(repository.findUser(id).orElseThrow());
     }
 
-    /** Removes a member's authenticator; they enroll a new one at their next login. */
+    /** Removes an account's authenticator; they enroll a new one at their next login. */
     @Transactional
     public void resetTotp(Actor actor, UUID id) {
         User user = requireUser(id);
@@ -622,11 +738,18 @@ public class AccountService {
         repository.updateTotp(id, null);
         repository.replaceRecoveryCodes(id, List.of());
         repository.revokeUserSessions(id, null, clock.instant());
-        audit(actor, "member.totpReset", user.email(), null);
+        audit(actor, "account.totpReset", user.email(), null);
     }
 
+    /** The audit log of the request's workspace. */
     @Transactional(readOnly = true)
-    public List<AuditEntry> auditLog(Instant before, int limit) {
-        return repository.listAudit(before, limit);
+    public List<AuditEntry> workspaceAuditLog(Instant before, int limit) {
+        return repository.listAudit(WorkspaceContext.id(), before, limit);
+    }
+
+    /** Every entry of the instance: all workspaces, sign-ins and account events. */
+    @Transactional(readOnly = true)
+    public List<AuditEntry> instanceAuditLog(Instant before, int limit) {
+        return repository.listAudit(null, before, limit);
     }
 }

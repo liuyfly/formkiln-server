@@ -8,7 +8,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import io.formkiln.server.TestcontainersConfiguration;
-import io.formkiln.server.accounts.AccountRepository;
 import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -40,7 +39,6 @@ class WorkspaceSchemaTest {
     @Autowired private WebApplicationContext context;
     @Autowired private JdbcClient jdbc;
     @Autowired private DataSource dataSource;
-    @Autowired private AccountRepository accounts;
 
     private MockMvc mvc;
     private UUID defaultWorkspace;
@@ -72,17 +70,17 @@ class WorkspaceSchemaTest {
 
     @Test
     void newRowsBelongToTheDefaultWorkspace() throws Exception {
-        mvc.perform(post("/v1/manage/forms/{key}/versions", "alpha").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/{key}/versions", "alpha").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(form("alpha"))).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/{key}/submissions", "alpha").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/v1/w/default/forms/{key}/submissions", "alpha").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"answers\": {\"name\": \"Ada\"}}")).andExpect(status().isCreated());
-        mvc.perform(post("/v1/manage/forms/{key}/webhooks", "alpha").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/{key}/webhooks", "alpha").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"url\": \"https://example.com/hook\"}"))
                 .andExpect(status().isCreated());
-        mvc.perform(put("/v1/manage/forms/{key}/notifications", "alpha").header("Authorization", TOKEN)
+        mvc.perform(put("/v1/manage/workspaces/default/forms/{key}/notifications", "alpha").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"teamRecipients\": [\"team@example.com\"]}"))
                 .andExpect(status().isOk());
-        mvc.perform(post("/v1/forms/{key}/submissions", "alpha").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/v1/w/default/forms/{key}/submissions", "alpha").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"answers\": {\"name\": \"Grace\"}}")).andExpect(status().isCreated());
 
         for (String table : List.of("form", "form_version", "submission", "webhook_endpoint", "webhook_delivery",
@@ -132,32 +130,6 @@ class WorkspaceSchemaTest {
                         INSERT INTO submission (form_version_id, workspace_id, data) VALUES (:version, :ws, '{}')
                         """).param("version", version).param("ws", hr).update())
                 .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void newAccountsAreMembersOfTheDefaultWorkspace() {
-        UUID editor = accounts.insertUser("ws-editor-" + UUID.randomUUID() + "@example.com", "x", null, "editor");
-        UUID admin = accounts.insertUser("ws-admin-" + UUID.randomUUID() + "@example.com", "x", null, "admin");
-        assertThat(membership(editor)).isEqualTo("editor");
-        assertThat(membership(admin)).isEqualTo("admin");
-        assertThat(instanceAdmin(editor)).isFalse();
-        assertThat(instanceAdmin(admin)).isTrue();
-
-        accounts.updateRole(editor, "admin");
-        accounts.updateRole(admin, "viewer");
-        assertThat(membership(editor)).isEqualTo("admin");
-        assertThat(membership(admin)).isEqualTo("viewer");
-        assertThat(instanceAdmin(editor)).isTrue();
-        assertThat(instanceAdmin(admin)).isFalse();
-    }
-
-    private String membership(UUID user) {
-        return jdbc.sql("SELECT role FROM workspace_member WHERE user_id = :id AND workspace_id = :ws")
-                .param("id", user).param("ws", defaultWorkspace).query(String.class).single();
-    }
-
-    private boolean instanceAdmin(UUID user) {
-        return jdbc.sql("SELECT instance_admin FROM admin_user WHERE id = :id").param("id", user).query(Boolean.class).single();
     }
 
     /** A database at V9 with data in every table moves into the default workspace. */

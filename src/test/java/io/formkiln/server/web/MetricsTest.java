@@ -43,7 +43,7 @@ class MetricsTest {
     void setUp() throws Exception {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         jdbc.sql("TRUNCATE submission, form_version, form, audit_log CASCADE").update();
-        mvc.perform(post("/v1/manage/forms/metered/versions")
+        mvc.perform(post("/v1/manage/workspaces/default/forms/metered/versions")
                         .header("Authorization", "Bearer test-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(FORM))
@@ -51,7 +51,7 @@ class MetricsTest {
     }
 
     private void submit(String body) throws Exception {
-        mvc.perform(post("/v1/forms/metered/submissions").contentType(MediaType.APPLICATION_JSON).content(body));
+        mvc.perform(post("/v1/w/default/forms/metered/submissions").contentType(MediaType.APPLICATION_JSON).content(body));
     }
 
     private String scrape() throws Exception {
@@ -75,7 +75,7 @@ class MetricsTest {
         mvc.perform(get("/actuator/prometheus").header("Authorization", "Bearer test-token")).andExpect(status().isForbidden());
         mvc.perform(get("/actuator/prometheus").header("Authorization", "Bearer wrong")).andExpect(status().isUnauthorized());
         // And the metrics token does not open the management API.
-        mvc.perform(get("/v1/manage/forms").header("Authorization", "Bearer metrics-token")).andExpect(status().isForbidden());
+        mvc.perform(get("/v1/manage/workspaces/default/forms").header("Authorization", "Bearer metrics-token")).andExpect(status().isNotFound());
         assertThat(scrape()).contains("jvm_memory_used_bytes").contains("formkiln_webhook_pending").contains("formkiln_mail_pending");
     }
 

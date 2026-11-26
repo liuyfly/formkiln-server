@@ -1,5 +1,6 @@
 package io.formkiln.server.notifications;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -62,11 +63,12 @@ public class NotificationRepository {
     public void renameConfirmationField(String formKey, String from, String to) {
         jdbc.sql("""
                         UPDATE form_notification_settings SET confirmation_email_field = :to
-                        WHERE confirmation_email_field = :from AND form_id = (SELECT id FROM form WHERE key = :key)
+                        WHERE confirmation_email_field = :from AND form_id = (SELECT id FROM form WHERE key = :key AND workspace_id = :ws)
                         """)
                 .param("to", to)
                 .param("from", from)
                 .param("key", formKey)
+                .param("ws", WorkspaceContext.id())
                 .update();
     }
 
@@ -107,7 +109,7 @@ public class NotificationRepository {
         jdbc.sql("""
                         INSERT INTO mail_outbox (form_id, workspace_id, kind, submission_id, draft_id, recipient_hint, payload,
                             next_attempt_at, created_at)
-                        VALUES (:form, COALESCE((SELECT workspace_id FROM form WHERE id = :form), (SELECT id FROM workspace WHERE slug = 'default')), :kind, :submission, :draft, :hint, :payload, :now, :now)
+                        VALUES (:form, (SELECT workspace_id FROM form WHERE id = :form), :kind, :submission, :draft, :hint, :payload, :now, :now)
                         """)
                 .param("form", formId)
                 .param("kind", kind)

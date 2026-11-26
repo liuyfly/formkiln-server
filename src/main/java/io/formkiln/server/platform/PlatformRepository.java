@@ -1,5 +1,6 @@
 package io.formkiln.server.platform;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -45,7 +46,8 @@ public class PlatformRepository {
     // ---------------------------------------------------------------- forms
 
     public Optional<FormRow> findForm(String key) {
-        return jdbc.sql("SELECT id, key, access_mode, archived_at IS NOT NULL AS archived FROM form WHERE key = :key")
+        return jdbc.sql("SELECT id, key, access_mode, archived_at IS NOT NULL AS archived FROM form WHERE key = :key AND workspace_id = :ws")
+                .param("ws", WorkspaceContext.id())
                 .param("key", key)
                 .query((rs, n) -> new FormRow(rs.getObject("id", UUID.class), rs.getString("key"), rs.getString("access_mode"),
                         rs.getBoolean("archived")))

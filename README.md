@@ -35,7 +35,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_DB_PASSWORD` | `formkiln` | Database password |
 | `FORMKILN_PORT` | `8080` | HTTP port |
 | `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP, sensitive answers, drafts, webhook secrets and payloads) and signs embed tokens. Keep it safe: losing it locks out every member and makes encrypted data unreadable. |
-| `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API (acts as an editor). Disabled when empty. |
+| `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API of the `default` workspace (acts as an editor there). Disabled when empty. |
 | `FORMKILN_METRICS_TOKEN` | _(empty)_ | Bearer token for Prometheus scraping at `/actuator/prometheus` (see [Operations](docs/operations.md#metrics)). Closed when empty. |
 | `FORMKILN_BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Invited as the first admin when there are no members yet |
 | `FORMKILN_ADMIN_URL` | `http://localhost:3200` | Base URL of the admin app, used in invitation and reset links |
@@ -84,6 +84,23 @@ Images are published to `ghcr.io/liuyfly/formkiln-server`: `edge` follows `main`
 Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. Validation problems (422) carry an
 `errors` array.
 
+### Workspaces
+
+Every form belongs to a workspace: a team's container for forms, folders, submissions, members and
+its audit log. Form keys and folder names are unique within a workspace, so every URL names the
+workspace by its slug (immutable; the display name can change). Existing installations start with
+one workspace, `default`.
+
+- Roles (`admin` ⊃ `editor` ⊃ `viewer`) belong to memberships: one account can be an editor in one
+  workspace and a viewer in another.
+- Anyone who is not a member gets **404** for every path under a workspace, so responses never
+  reveal that another team's workspace or form exists.
+- **Instance admins** create, rename and archive workspaces, manage accounts and the members of any
+  workspace, and read the instance-wide audit log. They do not see form data unless they are members.
+- An **archived** workspace is read-only for its members (writes: `409 workspaceArchived`) and its
+  forms are no longer served (runtime `404`). Restoring it (`PATCH .../workspaces/{workspace}`) and
+  erasure requests still work.
+
 ### Runtime (public, or with an embed token)
 
 A form's access mode is `public` (default) or `token`. Token forms require
@@ -92,39 +109,40 @@ Writes are rate-limited per client IP (`FORMKILN_RUNTIME_RATE_LIMIT`, default 60
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/forms/{key}` | Latest published version: `{ key, version, publishedAt, accessMode, captcha, definition }`. `captcha` is `{ provider, siteKey }` when human verification is required, otherwise `null`. |
-| `POST` | `/v1/forms/{key}/submissions` | Body `{ "version"?, "answers", "locale"?, "draftToken"?, "captchaToken"?, "honeypot"? }`. The server re-validates the answers against that version (default: latest) at the time of receipt. Returns `201 { id, version, outcome, submittedAt, receiptToken }`, or `422` with `[{ path, code, message?, params? }]`. Only the submission data (active, non-null values) is stored; `sensitive` fields are encrypted at rest. A non-empty `honeypot` is silently dropped. Public forms need a valid `captchaToken` when Turnstile is configured (`400 captchaFailed`). The draft named by `draftToken` is deleted. |
-| `GET` | `/v1/forms/{key}/receipt` | The respondent's receipt as a PDF, with the `receiptToken` of the submission in the `Formkiln-Receipt` header (valid for one hour; `401 receiptExpired`). Sensitive answers are left out. Optional `locale`. |
-| `POST` | `/v1/forms/{key}/drafts` | `{ answers }` → `201 { token, savedAt, expiresAt }`. Drafts are encrypted, expire after 30 days and hold at most 256 KB. |
-| `GET` / `PUT` / `DELETE` | `/v1/forms/{key}/drafts` | Read, replace (`{ answers }`) or delete the draft named by the `Formkiln-Draft: <token>` header |
-| `POST` | `/v1/forms/{key}/drafts/resume-link` | `{ email, locale? }` with the `Formkiln-Draft` header → `202`: emails a link that reopens the draft (`<hosted>/f/<key>#draft=<token>`). Only public forms with the option enabled (`resumeByEmail` in the form response); at most 3 emails per draft and day (`429 tooManyEmails`). |
-| `POST` | `/v1/forms/{key}/files` | Multipart `field`, `file` → `201 { id, name, size, contentType }`: the reference to put in the file field's answer. Checked against the field's `accept` / `fileTypes` (`415`) and `maxFileSize` and `FORMKILN_MAX_FILE_SIZE` (`413`). Files not claimed by a submission within a day are removed; a file can be claimed once. |
+| `GET` | `/v1/w/{workspace}/forms/{key}` | Latest published version: `{ key, version, publishedAt, accessMode, captcha, definition }`. `captcha` is `{ provider, siteKey }` when human verification is required, otherwise `null`. |
+| `POST` | `/v1/w/{workspace}/forms/{key}/submissions` | Body `{ "version"?, "answers", "locale"?, "draftToken"?, "captchaToken"?, "honeypot"? }`. The server re-validates the answers against that version (default: latest) at the time of receipt. Returns `201 { id, version, outcome, submittedAt, receiptToken }`, or `422` with `[{ path, code, message?, params? }]`. Only the submission data (active, non-null values) is stored; `sensitive` fields are encrypted at rest. A non-empty `honeypot` is silently dropped. Public forms need a valid `captchaToken` when Turnstile is configured (`400 captchaFailed`). The draft named by `draftToken` is deleted. |
+| `GET` | `/v1/w/{workspace}/forms/{key}/receipt` | The respondent's receipt as a PDF, with the `receiptToken` of the submission in the `Formkiln-Receipt` header (valid for one hour; `401 receiptExpired`). Sensitive answers are left out. Optional `locale`. |
+| `POST` | `/v1/w/{workspace}/forms/{key}/drafts` | `{ answers }` → `201 { token, savedAt, expiresAt }`. Drafts are encrypted, expire after 30 days and hold at most 256 KB. |
+| `GET` / `PUT` / `DELETE` | `/v1/w/{workspace}/forms/{key}/drafts` | Read, replace (`{ answers }`) or delete the draft named by the `Formkiln-Draft: <token>` header |
+| `POST` | `/v1/w/{workspace}/forms/{key}/drafts/resume-link` | `{ email, locale? }` with the `Formkiln-Draft` header → `202`: emails a link that reopens the draft (`<hosted>/f/<workspace>/<key>#draft=<token>`). Only public forms with the option enabled (`resumeByEmail` in the form response); at most 3 emails per draft and day (`429 tooManyEmails`). |
+| `POST` | `/v1/w/{workspace}/forms/{key}/files` | Multipart `field`, `file` → `201 { id, name, size, contentType }`: the reference to put in the file field's answer. Checked against the field's `accept` / `fileTypes` (`415`) and `maxFileSize` and `FORMKILN_MAX_FILE_SIZE` (`413`). Files not claimed by a submission within a day are removed; a file can be claimed once. |
 
 ### Management (signed-in member, or `Authorization: Bearer $FORMKILN_SERVICE_TOKEN`)
 
-Viewers can read; editors (and the service token) can also write.
+Viewers can read; editors (and the service token, in the `default` workspace) can also write.
+Embed and receipt tokens are only valid in the workspace that issued them.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/v1/manage/forms?archived=false` | Forms with their `title` (of the working copy, else of the latest version, in the form's default language), latest version (`null` until published), access mode, submission count, `unpublishedChanges`, `retentionDays`, `folderId` and `archivedAt`. `archived=true` lists the archived forms instead |
-| `POST` | `/v1/manage/forms/{key}/archive` | **Admin members only.** Hides the form and stops serving it (runtime `404`, no new versions: `409 formArchived`); versions, submissions, files and settings are kept |
-| `POST` | `/v1/manage/forms/{key}/restore` | **Admin members only.** Serves an archived form again |
-| `PUT` | `/v1/manage/forms/{key}/folder` | `{ folderId }` (`null`: top level) |
-| `GET` / `POST` | `/v1/manage/folders` | Folders (one level) with their count of active forms / `{ name }` → `201`. Names are unique ignoring case (`409 folderNameTaken`) |
-| `PATCH` / `DELETE` | `/v1/manage/folders/{id}` | Rename `{ name }` / delete. Only folders without active forms can be deleted (`409 folderNotEmpty`); archived forms in it move to the top level |
-| `POST` | `/v1/manage/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
-| `GET` | `/v1/manage/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
-| `GET` | `/v1/manage/forms/{key}/versions` | Published versions, newest first |
-| `GET` | `/v1/manage/forms/{key}/submissions?limit=50&before=<submittedAt>&beforeId=<id>&reveal=false` | Submissions, newest first. For the next page pass the `submittedAt` and `id` of the last row (`beforeId` keeps rows that share a time from being skipped). Sensitive values are masked (`••••`); `reveal=true` (editors only) shows them and is audited. |
-| `GET` | `/v1/manage/forms/{key}/submissions/export?reveal=false` | All submissions as CSV (UTF-8 with BOM), newest first: `id, version, outcome, submittedAt, subject`, then the answer keys of the latest version and keys only older versions have. File fields list file names; repeaters and composite values are JSON. Text that a spreadsheet would run as a formula is prefixed with `'`. Sensitive values are masked unless `reveal=true` (editors only). Audited. |
-| `GET` | `/v1/manage/forms/{key}/submissions/{id}/pdf?reveal=false` | One submission as a PDF (audited as `submission.pdf_exported`). Sensitive values are masked unless `reveal=true` (editors only). |
-| `GET` | `/v1/manage/forms/{key}/files/{id}` | Download a submitted file (audited) |
-| `PUT` | `/v1/manage/forms/{key}/access` | `{ mode: "public" \| "token" }` |
-| `POST` | `/v1/manage/embed-tokens` | `{ formKey, subject?, ttlSeconds? }` → `{ token, expiresAt }`. Call it from your backend and pass the token to the embedding page. Default lifetime 15 minutes, at most 1 hour. `subject` (for example your user id) is stored with the submission. |
-| `GET` / `POST` | `/v1/manage/forms/{key}/webhooks` | List webhooks; create one with `{ url }` (https only). The signing secret is returned once. |
-| `DELETE` | `/v1/manage/forms/{key}/webhooks/{id}` | Delete a webhook (pending deliveries are dropped) |
-| `GET` | `/v1/manage/forms/{key}/webhooks/{id}/deliveries` | Recent deliveries with status, attempts and last error |
-| `POST` | `/v1/manage/forms/{key}/webhook-deliveries/{id}/redeliver` | Queue a delivery again |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms?archived=false` | Forms with their `title` (of the working copy, else of the latest version, in the form's default language), latest version (`null` until published), access mode, submission count, `unpublishedChanges`, `retentionDays`, `folderId` and `archivedAt`. `archived=true` lists the archived forms instead |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/archive` | **Workspace admins only.** Hides the form and stops serving it (runtime `404`, no new versions: `409 formArchived`); versions, submissions, files and settings are kept |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/restore` | **Workspace admins only.** Serves an archived form again |
+| `PUT` | `/v1/manage/workspaces/{workspace}/forms/{key}/folder` | `{ folderId }` (`null`: top level) |
+| `GET` / `POST` | `/v1/manage/workspaces/{workspace}/folders` | Folders (one level) with their count of active forms / `{ name }` → `201`. Names are unique ignoring case (`409 folderNameTaken`) |
+| `PATCH` / `DELETE` | `/v1/manage/workspaces/{workspace}/folders/{id}` | Rename `{ name }` / delete. Only folders without active forms can be deleted (`409 folderNotEmpty`); archived forms in it move to the top level |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/versions` | Publish the form document in the body as a new immutable version. It is validated against the JSON Schema (`code: "schema"`) and the static rules of Form Schema §10. The document's `key` must equal `{key}` (`keyMismatch`). |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/versions/{version}` | One version with its definition: `{ key, version, publishedAt, definition }` |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/versions` | Published versions, newest first |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/submissions?limit=50&before=<submittedAt>&beforeId=<id>&reveal=false` | Submissions, newest first. For the next page pass the `submittedAt` and `id` of the last row (`beforeId` keeps rows that share a time from being skipped). Sensitive values are masked (`••••`); `reveal=true` (editors only) shows them and is audited. |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/submissions/export?reveal=false` | All submissions as CSV (UTF-8 with BOM), newest first: `id, version, outcome, submittedAt, subject`, then the answer keys of the latest version and keys only older versions have. File fields list file names; repeaters and composite values are JSON. Text that a spreadsheet would run as a formula is prefixed with `'`. Sensitive values are masked unless `reveal=true` (editors only). Audited. |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/submissions/{id}/pdf?reveal=false` | One submission as a PDF (audited as `submission.pdf_exported`). Sensitive values are masked unless `reveal=true` (editors only). |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/files/{id}` | Download a submitted file (audited) |
+| `PUT` | `/v1/manage/workspaces/{workspace}/forms/{key}/access` | `{ mode: "public" \| "token" }` |
+| `POST` | `/v1/manage/workspaces/{workspace}/embed-tokens` | `{ formKey, subject?, ttlSeconds? }` → `{ token, expiresAt }`. Call it from your backend and pass the token to the embedding page. Default lifetime 15 minutes, at most 1 hour. `subject` (for example your user id) is stored with the submission. |
+| `GET` / `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/webhooks` | List webhooks; create one with `{ url }` (https only). The signing secret is returned once. |
+| `DELETE` | `/v1/manage/workspaces/{workspace}/forms/{key}/webhooks/{id}` | Delete a webhook (pending deliveries are dropped) |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/webhooks/{id}/deliveries` | Recent deliveries with status, attempts and last error |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/webhook-deliveries/{id}/redeliver` | Queue a delivery again |
 
 Management changes are written to the audit log with the member (or `service`) and client IP:
 `form.published`, `form.access_changed`, `embed_token.issued` (by members only; backends issue one
@@ -141,12 +159,12 @@ invalid while it is edited; its `problems` are returned with every read and save
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/v1/manage/forms` | `{ key, title, document?, source? }` → `201`: an unpublished form. Its working copy is `document` (a template or a copy of another form, with the new key and, if given, title) or a one-page skeleton. `source` (for example `template:contact`) is recorded in the audit log. `409 formExists`, `400 invalidKey`. Not served at runtime until published. |
-| `GET` | `/v1/manage/forms/{key}/working-copy` | `{ key, revision, baseVersion, latestVersion, document, updatedAt, updatedBy, problems }`. Without a saved copy, the latest published definition with `revision: 0`. |
-| `PUT` | `/v1/manage/forms/{key}/working-copy` | `{ revision, document }` (`revision: 0` for the first save) → the saved copy with its new revision. Documents up to 1 MB. |
-| `DELETE` | `/v1/manage/forms/{key}/working-copy` | Discard the copy; editing starts again from the published version (`409 neverPublished` for unpublished forms). |
-| `GET` | `/v1/manage/forms/{key}/working-copy/check` | `{ problems, changes }`. `changes` compare a valid copy with the published version: `fieldRemoved`, `typeChanged` (`from`, `to`) and `optionsRemoved` (`values`), by answer path (`key` or `repeater.child`). |
-| `POST` | `/v1/manage/forms/{key}/working-copy/publish` | `{ revision, acknowledgeChanges }` → `201 { key, version, publishedAt }` and the copy is removed. `422` with `errors` when invalid; `409 changesNotAcknowledged` with `changes` until they are acknowledged. |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms` | `{ key, title, document?, source? }` → `201`: an unpublished form. Its working copy is `document` (a template or a copy of another form, with the new key and, if given, title) or a one-page skeleton. `source` (for example `template:contact`) is recorded in the audit log. `409 formExists`, `400 invalidKey`. Not served at runtime until published. |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/working-copy` | `{ key, revision, baseVersion, latestVersion, document, updatedAt, updatedBy, problems }`. Without a saved copy, the latest published definition with `revision: 0`. |
+| `PUT` | `/v1/manage/workspaces/{workspace}/forms/{key}/working-copy` | `{ revision, document }` (`revision: 0` for the first save) → the saved copy with its new revision. Documents up to 1 MB. |
+| `DELETE` | `/v1/manage/workspaces/{workspace}/forms/{key}/working-copy` | Discard the copy; editing starts again from the published version (`409 neverPublished` for unpublished forms). |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/working-copy/check` | `{ problems, changes }`. `changes` compare a valid copy with the published version: `fieldRemoved`, `typeChanged` (`from`, `to`) and `optionsRemoved` (`values`), by answer path (`key` or `repeater.child`). |
+| `POST` | `/v1/manage/workspaces/{workspace}/forms/{key}/working-copy/publish` | `{ revision, acknowledgeChanges }` → `201 { key, version, publishedAt }` and the copy is removed. `422` with `errors` when invalid; `409 changesNotAcknowledged` with `changes` until they are acknowledged. |
 
 Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `working_copy.discarded`.
 
@@ -154,8 +172,8 @@ Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `wo
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` / `PUT` | `/v1/manage/forms/{key}/notifications` | `{ teamRecipients, teamIncludeAnswers, confirmationEnabled, confirmationEmailField, confirmationSubject, confirmationBody, resumeEnabled }` (editors change them; audited as `notifications.updated`). |
-| `GET` | `/v1/manage/forms/{key}/mail?limit=50` | Recent emails of the form: kind, masked recipient, status (`pending`, `sent`, `dead`), attempts, last error. |
+| `GET` / `PUT` | `/v1/manage/workspaces/{workspace}/forms/{key}/notifications` | `{ teamRecipients, teamIncludeAnswers, confirmationEnabled, confirmationEmailField, confirmationSubject, confirmationBody, resumeEnabled }` (editors change them; audited as `notifications.updated`). |
+| `GET` | `/v1/manage/workspaces/{workspace}/forms/{key}/mail?limit=50` | Recent emails of the form: kind, masked recipient, status (`pending`, `sent`, `dead`), attempts, last error. |
 
 - **Team notification** to up to 20 addresses on every submission, with a link to the form in the admin. With `teamIncludeAnswers` it lists the answers too.
 - **Confirmation** to the address in `confirmationEmailField` when it holds a valid email. The subject and body are plain-text templates with `{{form.title}}`, `{{submission.id}}`, `{{submission.submittedAt}}`, `{{answers}}` (label: value lines) and `{{answer.<key>}}`. Subjects are kept on one line.
@@ -165,9 +183,9 @@ Audited: `form.created`, `form.published` (with `source: "workingCopy"`) and `wo
 
 | Method | Path | Who | Description |
 | --- | --- | --- | --- |
-| `DELETE` | `/v1/manage/forms/{key}/submissions/{id}` | editors | Deletes a submission with its files, webhook deliveries and queued emails (audited as `submission.deleted`). |
-| `GET` / `PUT` | `/v1/manage/forms/{key}/retention` | viewers / editors | `{ days }`: submissions older than this (1 to 36500 days) are deleted automatically every hour (`retention.purged` in the audit log); `null` keeps them until deleted. |
-| `POST` | `/v1/admin/erasure` | admins | `{ email?, subject?, dryRun = true }`: every submission, across all forms, whose answers contain the email address (any field, repeater items included, case-insensitive) or whose embed-token subject matches. A dry run returns the matches per form; `dryRun: false` deletes them. The audit log keeps a keyed fingerprint of the identifier, not the identifier itself. |
+| `DELETE` | `/v1/manage/workspaces/{workspace}/forms/{key}/submissions/{id}` | editors | Deletes a submission with its files, webhook deliveries and queued emails (audited as `submission.deleted`). |
+| `GET` / `PUT` | `/v1/manage/workspaces/{workspace}/forms/{key}/retention` | viewers / editors | `{ days }`: submissions older than this (1 to 36500 days) are deleted automatically every hour (`retention.purged` in the audit log); `null` keeps them until deleted. |
+| `POST` | `/v1/admin/workspaces/{workspace}/erasure` | workspace admins | `{ email?, subject?, dryRun = true }`: every submission, across all forms of the workspace, whose answers contain the email address (any field, repeater items included, case-insensitive) or whose embed-token subject matches. A dry run returns the matches per form; `dryRun: false` deletes them. The audit log keeps a keyed fingerprint of the identifier, not the identifier itself. |
 
 Sensitive answers are encrypted and are not searched by erasure requests; drafts are anonymous and expire after 30 days. Stored file objects are removed after the deletion is committed.
 
@@ -203,10 +221,14 @@ Per-IP limits and Turnstile use the client address. Behind a reverse proxy, the 
 
 ### Admin accounts
 
-Members are invited by email. Each member has a password and an authenticator app (TOTP).
-There is no self-registration.
+Members are invited by email to a workspace. Each account has a password and an authenticator app
+(TOTP). There is no self-registration. Adding an address that already has an account makes it a member
+at once (it is told by email); accepting an invitation also accepts the account's other open
+invitations.
 
-- **Roles**: `admin` ⊃ `editor` ⊃ `viewer`. There is always at least one active admin.
+- **Roles**: `admin` ⊃ `editor` ⊃ `viewer`, per workspace. Every workspace keeps at least one active
+  admin, and the instance at least one active instance admin. The first account (bootstrap) is admin of
+  `default` and instance admin.
 - **Sessions**: the session is a cookie `formkiln_session` (`HttpOnly`, `SameSite=Strict`, path `/v1`). It
   expires after 30 minutes idle or 12 hours. Disabling a member, resetting or changing a password, or resetting
   an authenticator ends their other sessions.
@@ -219,22 +241,30 @@ There is no self-registration.
 
 | Method | Path | Who | Description |
 | --- | --- | --- | --- |
-| `POST` | `/v1/admin/invitations/inspect` | link holder | `{ token }`. Returns `{ email, role, expiresAt, totp: { secret, otpauthUri } }` |
+| `POST` | `/v1/admin/invitations/inspect` | link holder | `{ token }`. Returns `{ email, workspace, role, expiresAt, totp: { secret, otpauthUri } }` |
 | `POST` | `/v1/admin/invitations/accept` | link holder | `{ token, password, code }`. Creates the account and signs in. Returns `{ user, recoveryCodes }` (shown once) |
 | `POST` | `/v1/admin/auth/login` | anyone | `{ email, password }` → `{ challenge, enrollTotp? }` (`enrollTotp` after an authenticator reset) |
 | `POST` | `/v1/admin/auth/mfa` | anyone | `{ challenge, code }` or `{ challenge, recoveryCode }`. Sets the session cookie, returns `{ user, recoveryCodes? }` |
 | `POST` | `/v1/admin/auth/password/forgot` | anyone | `{ email }` → `202`, whether or not the email exists |
 | `POST` | `/v1/admin/auth/password/reset` | link holder | `{ token, password }` |
-| `GET` | `/v1/admin/auth/me` | member | The signed-in member |
+| `GET` | `/v1/admin/auth/me` | member | The signed-in account: `{ id, email, status, instanceAdmin, lastLoginAt, createdAt, workspaces: [{ slug, name, role, archived }] }` |
 | `POST` | `/v1/admin/auth/logout` | member | Ends the session |
 | `POST` | `/v1/admin/me/password` | member | `{ currentPassword, newPassword }` |
 | `POST` | `/v1/admin/me/recovery-codes` | member | `{ code }` → new recovery codes |
 | `GET` / `DELETE` | `/v1/admin/me/sessions[/{id}]` | member | List or end own sessions |
-| `GET` / `PATCH` | `/v1/admin/members[/{id}]` | admin | List members; change `role` or `status` (`active`, `disabled`) |
-| `POST` | `/v1/admin/members/{id}/reset-totp` | admin | The member enrolls a new authenticator at next login |
-| `GET` / `POST` | `/v1/admin/invitations` | admin | List open invitations; invite `{ email, role }` |
-| `POST` / `DELETE` | `/v1/admin/invitations/{id}[/resend]` | admin | Resend (new link) or revoke |
-| `GET` | `/v1/admin/audit?limit=100&before=<at>` | admin | Audit log, newest first |
+| `GET` | `/v1/admin/workspaces/{workspace}` | workspace member | `{ workspace: { slug, name, createdAt, archivedAt }, role }` |
+| `PATCH` | `/v1/admin/workspaces/{workspace}` | workspace admin, instance admin | `{ name?, archived? }`: rename, archive or restore |
+| `GET` / `POST` | `/v1/admin/workspaces/{workspace}/members` | workspace admin, instance admin | List members; add `{ email, role }` → `201 { result: "added", member }` for an existing account, `{ result: "invited", invitation }` otherwise |
+| `PATCH` / `DELETE` | `/v1/admin/workspaces/{workspace}/members/{id}` | workspace admin, instance admin | Change `{ role }`; remove from the workspace (the account stays) |
+| `GET` | `/v1/admin/workspaces/{workspace}/invitations` | workspace admin, instance admin | Open invitations |
+| `POST` / `DELETE` | `/v1/admin/workspaces/{workspace}/invitations/{id}[/resend]` | workspace admin, instance admin | Resend (new link) or revoke |
+| `GET` | `/v1/admin/workspaces/{workspace}/audit?limit=100&before=<at>` | workspace admin, instance admin | The workspace's audit log, newest first |
+| `GET` / `POST` | `/v1/admin/instance/workspaces` | instance admin | All workspaces with member and form counts; create `{ slug, name }` |
+| `PATCH` | `/v1/admin/instance/workspaces/{slug}` | instance admin | `{ name?, archived? }` |
+| `GET` | `/v1/admin/instance/accounts` | instance admin | Every account with its workspaces |
+| `PATCH` | `/v1/admin/instance/accounts/{id}` | instance admin | `{ status? (active, disabled), instanceAdmin? }` |
+| `POST` | `/v1/admin/instance/accounts/{id}/reset-totp` | instance admin | The account enrolls a new authenticator at next login |
+| `GET` | `/v1/admin/instance/audit?limit=100&before=<at>` | instance admin | Every audit entry (all workspaces, sign-ins, account events), with `workspace` |
 
 The public endpoints are rate-limited per IP. Problem details carry a stable `code` (`loginFailed`,
 `invalidToken`, `weakPassword`, `invalidCode`, `lastAdmin`, …).

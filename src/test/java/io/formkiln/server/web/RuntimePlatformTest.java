@@ -1,5 +1,6 @@
 package io.formkiln.server.web;
 
+import io.formkiln.server.TestMembers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
@@ -124,7 +125,7 @@ class RuntimePlatformTest {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         jdbc.sql("TRUNCATE submission, form_version, form, audit_log CASCADE").update();
         captcha.enabled = false;
-        mvc.perform(post("/v1/manage/forms/apply/versions")
+        mvc.perform(post("/v1/manage/workspaces/default/forms/apply/versions")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(FORM))
@@ -141,7 +142,7 @@ class RuntimePlatformTest {
     }
 
     private MvcResult submit(String answers, String extra) throws Exception {
-        return mvc.perform(post("/v1/forms/apply/submissions")
+        return mvc.perform(post("/v1/w/default/forms/apply/submissions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": " + answers + extra + "}"))
                 .andReturn();
@@ -156,17 +157,17 @@ class RuntimePlatformTest {
         String stored = jdbc.sql("SELECT data::text FROM submission").query(String.class).single();
         assertThat(stored).doesNotContain("123-45-6789").contains("$enc").contains("Ada");
 
-        mvc.perform(get("/v1/manage/forms/apply/submissions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].data.name").value("Ada"))
                 .andExpect(jsonPath("$[0].data.ssn").value("••••"));
-        mvc.perform(get("/v1/manage/forms/apply/submissions").param("reveal", "true").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").param("reveal", "true").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].data.ssn").value("123-45-6789"));
         assertThat(jdbc.sql("SELECT count(*) FROM audit_log WHERE action = 'submissions.revealed'").query(Long.class).single())
                 .isEqualTo(1);
     }
 
     private String export(String reveal) throws Exception {
-        MvcResult started = mvc.perform(get("/v1/manage/forms/apply/submissions/export").param("reveal", reveal)
+        MvcResult started = mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions/export").param("reveal", reveal)
                         .header("Authorization", TOKEN))
                 .andExpect(request().asyncStarted())
                 .andReturn();
@@ -183,7 +184,7 @@ class RuntimePlatformTest {
         assertThat(submit("{\"name\": \"=HYPERLINK(1)\", \"ssn\": \"123-45\"}", "").getResponse().getStatus()).isEqualTo(201);
         assertThat(submit("{\"name\": \"Lovelace, \\\"Ada\\\"\"}", "").getResponse().getStatus()).isEqualTo(201);
         // A second version renames a field; the old key stays as a trailing column.
-        mvc.perform(post("/v1/manage/forms/apply/versions")
+        mvc.perform(post("/v1/manage/workspaces/default/forms/apply/versions")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(FORM.replace("\"key\": \"ssn\"", "\"key\": \"taxId\"")))
@@ -200,20 +201,20 @@ class RuntimePlatformTest {
                         .query(String.class).list())
                 .containsExactly("{\"reveal\": false}", "{\"reveal\": true}");
 
-        mvc.perform(get("/v1/manage/forms/apply/submissions/export").param("reveal", "true")
-                        .with(user("v").authorities(() -> "viewer")))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions/export").param("reveal", "true")
+                        .with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isForbidden());
-        mvc.perform(get("/v1/manage/forms/missing/submissions/export").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/missing/submissions/export").header("Authorization", TOKEN))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void returnsAVersionWithItsDefinition() throws Exception {
-        mvc.perform(get("/v1/manage/forms/apply/versions/1").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/versions/1").header("Authorization", TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.definition.pages[0].elements[1].sensitive").value(true));
-        mvc.perform(get("/v1/manage/forms/apply/versions/9").header("Authorization", TOKEN)).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/versions/9").header("Authorization", TOKEN)).andExpect(status().isNotFound());
     }
 
     @Test
@@ -222,10 +223,10 @@ class RuntimePlatformTest {
             assertThat(submit("{\"name\": \"n" + i + "\"}", "").getResponse().getStatus()).isEqualTo(201);
         }
         jdbc.sql("UPDATE submission SET submitted_at = '2026-01-01T00:00:00Z'").update();
-        List<?> first = json.readValue(mvc.perform(get("/v1/manage/forms/apply/submissions").param("limit", "2")
+        List<?> first = json.readValue(mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").param("limit", "2")
                         .header("Authorization", TOKEN)).andReturn().getResponse().getContentAsString(), List.class);
         Map<?, ?> last = (Map<?, ?>) first.getLast();
-        List<?> second = json.readValue(mvc.perform(get("/v1/manage/forms/apply/submissions").param("limit", "2")
+        List<?> second = json.readValue(mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").param("limit", "2")
                         .param("before", (String) last.get("submittedAt")).param("beforeId", (String) last.get("id"))
                         .header("Authorization", TOKEN)).andReturn().getResponse().getContentAsString(), List.class);
         assertThat(second).hasSize(1);
@@ -234,26 +235,26 @@ class RuntimePlatformTest {
 
     @Test
     void auditsManagementChanges() throws Exception {
-        mvc.perform(put("/v1/manage/forms/apply/access")
+        mvc.perform(put("/v1/manage/workspaces/default/forms/apply/access")
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"mode\": \"token\"}"));
-        mvc.perform(post("/v1/manage/embed-tokens")
-                .with(user("e").authorities(() -> "editor"))
+        mvc.perform(post("/v1/manage/workspaces/default/embed-tokens")
+                .with(TestMembers.member(jdbc, "editor"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"formKey\": \"apply\", \"ttlSeconds\": 600}"))
                 .andExpect(status().isOk());
-        mvc.perform(post("/v1/manage/embed-tokens")
+        mvc.perform(post("/v1/manage/workspaces/default/embed-tokens")
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"formKey\": \"apply\"}"))
                 .andExpect(status().isOk());
-        String id = (String) body(mvc.perform(post("/v1/manage/forms/apply/webhooks")
+        String id = (String) body(mvc.perform(post("/v1/manage/workspaces/default/forms/apply/webhooks")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"url\": \"https://example.com/hook\"}"))
                 .andReturn()).get("id");
-        mvc.perform(delete("/v1/manage/forms/apply/webhooks/{id}", id).header("Authorization", TOKEN))
+        mvc.perform(delete("/v1/manage/workspaces/default/forms/apply/webhooks/{id}", id).header("Authorization", TOKEN))
                 .andExpect(status().isNoContent());
 
         assertThat(jdbc.sql("SELECT action || ' ' || coalesce(details::text, '') FROM audit_log ORDER BY at, action")
@@ -268,9 +269,9 @@ class RuntimePlatformTest {
 
     @Test
     void viewersCannotReveal() throws Exception {
-        mvc.perform(get("/v1/manage/forms/apply/submissions").with(user("v").authorities(() -> "viewer")))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isOk());
-        mvc.perform(get("/v1/manage/forms/apply/submissions").param("reveal", "true").with(user("v").authorities(() -> "viewer")))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").param("reveal", "true").with(TestMembers.member(jdbc, "viewer")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("revealForbidden"));
     }
@@ -279,7 +280,7 @@ class RuntimePlatformTest {
 
     @Test
     void savesReadsAndDiscardsDraftsByToken() throws Exception {
-        Map<?, ?> created = body(mvc.perform(post("/v1/forms/apply/drafts")
+        Map<?, ?> created = body(mvc.perform(post("/v1/w/default/forms/apply/drafts")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"name\": \"Ada\", \"ssn\": \"secret\"}}"))
                 .andExpect(status().isCreated())
@@ -287,34 +288,34 @@ class RuntimePlatformTest {
         String token = (String) created.get("token");
         assertThat(jdbc.sql("SELECT encode(data, 'escape') FROM form_draft").query(String.class).single()).doesNotContain("secret");
 
-        mvc.perform(put("/v1/forms/apply/drafts")
+        mvc.perform(put("/v1/w/default/forms/apply/drafts")
                         .header("Formkiln-Draft", token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"name\": \"Grace\"}}"))
                 .andExpect(status().isOk());
-        mvc.perform(get("/v1/forms/apply/drafts").header("Formkiln-Draft", token))
+        mvc.perform(get("/v1/w/default/forms/apply/drafts").header("Formkiln-Draft", token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.answers.name").value("Grace"));
-        mvc.perform(get("/v1/forms/apply/drafts").header("Formkiln-Draft", "wrong")).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/w/default/forms/apply/drafts").header("Formkiln-Draft", "wrong")).andExpect(status().isNotFound());
 
         assertThat(submit("{\"name\": \"Grace\"}", ", \"draftToken\": \"" + token + "\"").getResponse().getStatus()).isEqualTo(201);
-        mvc.perform(get("/v1/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/w/default/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNotFound());
     }
 
     @Test
     void deletesADraft() throws Exception {
-        String token = (String) body(mvc.perform(post("/v1/forms/apply/drafts")
+        String token = (String) body(mvc.perform(post("/v1/w/default/forms/apply/drafts")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {}}"))
                 .andReturn()).get("token");
-        mvc.perform(delete("/v1/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNoContent());
-        mvc.perform(get("/v1/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNotFound());
+        mvc.perform(delete("/v1/w/default/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNoContent());
+        mvc.perform(get("/v1/w/default/forms/apply/drafts").header("Formkiln-Draft", token)).andExpect(status().isNotFound());
     }
 
     // ---------------------------------------------------------------- files
 
     private MvcResult upload(String field, String name, String type, byte[] data) throws Exception {
-        return mvc.perform(multipart("/v1/forms/apply/files")
+        return mvc.perform(multipart("/v1/w/default/forms/apply/files")
                         .file(new MockMultipartFile("file", name, type, data))
                         .param("field", field))
                 .andReturn();
@@ -331,11 +332,11 @@ class RuntimePlatformTest {
         // The client's claimed metadata is replaced by the stored one.
         String answers = "{\"name\": \"Ada\", \"doc\": [{\"id\": \"" + id + "\", \"name\": \"x.exe\", \"size\": 1, \"contentType\": \"x/y\"}]}";
         assertThat(submit(answers, "").getResponse().getStatus()).isEqualTo(201);
-        mvc.perform(get("/v1/manage/forms/apply/submissions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].data.doc[0].name").value("payslip.pdf"))
                 .andExpect(jsonPath("$[0].data.doc[0].contentType").value("application/pdf"));
 
-        mvc.perform(get("/v1/manage/forms/apply/files/{id}", id).header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/files/{id}", id).header("Authorization", TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Disposition", startsWith("attachment")))
                 .andExpect(content().bytes("%PDF-1.7".getBytes(StandardCharsets.UTF_8)));
@@ -355,61 +356,61 @@ class RuntimePlatformTest {
     @Test
     void unattachedFilesCannotBeDownloaded() throws Exception {
         String id = (String) body(upload("doc", "a.pdf", "application/pdf", new byte[] {1})).get("id");
-        mvc.perform(get("/v1/manage/forms/apply/files/{id}", id).header("Authorization", TOKEN)).andExpect(status().isNotFound());
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/files/{id}", id).header("Authorization", TOKEN)).andExpect(status().isNotFound());
     }
 
     // ---------------------------------------------------------------- embed tokens
 
     @Test
     void tokenFormsNeedAValidEmbedToken() throws Exception {
-        mvc.perform(put("/v1/manage/forms/apply/access")
+        mvc.perform(put("/v1/manage/workspaces/default/forms/apply/access")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"mode\": \"token\"}"))
                 .andExpect(status().isOk());
-        mvc.perform(get("/v1/forms/apply"))
+        mvc.perform(get("/v1/w/default/forms/apply"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("embedTokenRequired"));
 
-        String embed = (String) body(mvc.perform(post("/v1/manage/embed-tokens")
+        String embed = (String) body(mvc.perform(post("/v1/manage/workspaces/default/embed-tokens")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\": \"apply\", \"subject\": \"tenant-42\"}"))
                 .andExpect(status().isOk())
                 .andReturn()).get("token");
 
-        mvc.perform(get("/v1/forms/apply").header("Authorization", "Bearer " + embed))
+        mvc.perform(get("/v1/w/default/forms/apply").header("Authorization", "Bearer " + embed))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessMode").value("token"));
-        mvc.perform(post("/v1/forms/apply/submissions")
+        mvc.perform(post("/v1/w/default/forms/apply/submissions")
                         .header("Authorization", "Bearer " + embed)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"answers\": {\"name\": \"Ada\"}}"))
                 .andExpect(status().isCreated());
-        mvc.perform(get("/v1/manage/forms/apply/submissions").header("Authorization", TOKEN))
+        mvc.perform(get("/v1/manage/workspaces/default/forms/apply/submissions").header("Authorization", TOKEN))
                 .andExpect(jsonPath("$[0].subject").value("tenant-42"));
 
-        mvc.perform(get("/v1/forms/apply").header("Authorization", "Bearer " + embed + "x")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/w/default/forms/apply").header("Authorization", "Bearer " + embed + "x")).andExpect(status().isUnauthorized());
     }
 
     @Test
     void embedTokensAreBoundToTheirForm() throws Exception {
-        mvc.perform(post("/v1/manage/forms/other/versions")
+        mvc.perform(post("/v1/manage/workspaces/default/forms/other/versions")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(FORM.replace("\"apply\"", "\"other\"")))
                 .andExpect(status().isCreated());
-        mvc.perform(put("/v1/manage/forms/apply/access")
+        mvc.perform(put("/v1/manage/workspaces/default/forms/apply/access")
                 .header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"mode\": \"token\"}"));
-        String other = (String) body(mvc.perform(post("/v1/manage/embed-tokens")
+        String other = (String) body(mvc.perform(post("/v1/manage/workspaces/default/embed-tokens")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\": \"other\"}"))
                 .andReturn()).get("token");
-        mvc.perform(get("/v1/forms/apply").header("Authorization", "Bearer " + other)).andExpect(status().isUnauthorized());
-        mvc.perform(post("/v1/manage/embed-tokens")
+        mvc.perform(get("/v1/w/default/forms/apply").header("Authorization", "Bearer " + other)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/v1/manage/workspaces/default/embed-tokens")
                         .header("Authorization", TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\": \"apply\", \"ttlSeconds\": 7200}"))
@@ -427,7 +428,7 @@ class RuntimePlatformTest {
     @Test
     void publicFormsRequireHumanVerificationWhenEnabled() throws Exception {
         captcha.enabled = true;
-        mvc.perform(get("/v1/forms/apply"))
+        mvc.perform(get("/v1/w/default/forms/apply"))
                 .andExpect(jsonPath("$.captcha.provider").value("turnstile"))
                 .andExpect(jsonPath("$.captcha.siteKey").value("site-key"));
         MvcResult failed = submit("{\"name\": \"Ada\"}", ", \"captchaToken\": \"fail\"");
@@ -435,7 +436,7 @@ class RuntimePlatformTest {
         assertThat(submit("{\"name\": \"Ada\"}", ", \"captchaToken\": \"pass\"").getResponse().getStatus()).isEqualTo(201);
 
         captcha.enabled = false;
-        mvc.perform(get("/v1/forms/apply")).andExpect(jsonPath("$.captcha").value(nullValue()));
+        mvc.perform(get("/v1/w/default/forms/apply")).andExpect(jsonPath("$.captcha").value(nullValue()));
     }
 
     // ---------------------------------------------------------------- webhooks
@@ -457,7 +458,7 @@ class RuntimePlatformTest {
         server.start();
         try {
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/hook";
-            Map<?, ?> endpoint = body(mvc.perform(post("/v1/manage/forms/apply/webhooks")
+            Map<?, ?> endpoint = body(mvc.perform(post("/v1/manage/workspaces/default/forms/apply/webhooks")
                             .header("Authorization", TOKEN)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"url\": \"" + url + "\"}"))
@@ -465,7 +466,7 @@ class RuntimePlatformTest {
                     .andReturn());
             String secret = (String) endpoint.get("secret");
             assertThat(secret).startsWith("whsec_");
-            mvc.perform(get("/v1/manage/forms/apply/webhooks").header("Authorization", TOKEN))
+            mvc.perform(get("/v1/manage/workspaces/default/forms/apply/webhooks").header("Authorization", TOKEN))
                     .andExpect(jsonPath("$", hasSize(1)))
                     .andExpect(jsonPath("$[0].secret").value(nullValue()));
 
@@ -473,7 +474,7 @@ class RuntimePlatformTest {
 
             webhooks.deliverDue();
             assertThat(received).hasSize(1);
-            String deliveries = "/v1/manage/forms/apply/webhooks/" + endpoint.get("id") + "/deliveries";
+            String deliveries = "/v1/manage/workspaces/default/forms/apply/webhooks/" + endpoint.get("id") + "/deliveries";
             mvc.perform(get(deliveries).header("Authorization", TOKEN))
                     .andExpect(jsonPath("$[0].status").value("pending"))
                     .andExpect(jsonPath("$[0].attempts").value(1))
@@ -486,7 +487,7 @@ class RuntimePlatformTest {
             String deliveryId = (String) ((Map<?, ?>) json.readValue(
                     mvc.perform(get(deliveries).header("Authorization", TOKEN)).andReturn().getResponse().getContentAsString(),
                     List.class).getFirst()).get("id");
-            mvc.perform(post("/v1/manage/forms/apply/webhook-deliveries/{id}/redeliver", deliveryId).header("Authorization", TOKEN))
+            mvc.perform(post("/v1/manage/workspaces/default/forms/apply/webhook-deliveries/{id}/redeliver", deliveryId).header("Authorization", TOKEN))
                     .andExpect(status().isOk());
             webhooks.deliverDue();
             assertThat(received).hasSize(2);
@@ -513,7 +514,7 @@ class RuntimePlatformTest {
     @Test
     void rejectsInvalidWebhookUrls() throws Exception {
         for (String url : List.of("ftp://example.com/x", "https://user:pw@example.com/x", "not a url")) {
-            mvc.perform(post("/v1/manage/forms/apply/webhooks")
+            mvc.perform(post("/v1/manage/workspaces/default/forms/apply/webhooks")
                             .header("Authorization", TOKEN)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"url\": \"" + url + "\"}"))
@@ -531,19 +532,19 @@ class RuntimePlatformTest {
                  ]}],
                  "submit": {"outcomes": [{"key": "done"}]}}
                 """;
-        mvc.perform(post("/v1/manage/forms/renamed/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/renamed/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(v1)).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/v1/w/default/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"answers\": {\"name\": \"Ada\", \"note\": \"first\"}}")).andExpect(status().isCreated());
         // Version 2 renames name (same id) and adds an id to note (joined by key).
         String v2 = v1.replace("\"key\": \"name\"", "\"key\": \"fullName\"")
                 .replace("{\"type\": \"text\", \"key\": \"note\"", "{\"type\": \"text\", \"id\": \"t1\", \"key\": \"note\"");
-        mvc.perform(post("/v1/manage/forms/renamed/versions").header("Authorization", TOKEN)
+        mvc.perform(post("/v1/manage/workspaces/default/forms/renamed/versions").header("Authorization", TOKEN)
                 .contentType(MediaType.APPLICATION_JSON).content(v2)).andExpect(status().isCreated());
-        mvc.perform(post("/v1/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/v1/w/default/forms/renamed/submissions").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"answers\": {\"fullName\": \"Grace\", \"note\": \"second\"}}")).andExpect(status().isCreated());
 
-        MvcResult started = mvc.perform(get("/v1/manage/forms/renamed/submissions/export").param("reveal", "false")
+        MvcResult started = mvc.perform(get("/v1/manage/workspaces/default/forms/renamed/submissions/export").param("reveal", "false")
                         .header("Authorization", TOKEN))
                 .andExpect(request().asyncStarted()).andReturn();
         String csv = mvc.perform(asyncDispatch(started)).andExpect(status().isOk()).andReturn()

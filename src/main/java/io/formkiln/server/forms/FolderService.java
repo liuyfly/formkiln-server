@@ -1,5 +1,6 @@
 package io.formkiln.server.forms;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.forms.FormService.NotFoundException;
 import io.formkiln.server.platform.RuntimeException4xx;
 import java.util.List;
@@ -35,8 +36,10 @@ public class FolderService {
                         SELECT d.id, d.name,
                                (SELECT COUNT(*) FROM form f WHERE f.folder_id = d.id AND f.archived_at IS NULL) AS form_count
                         FROM form_folder d
+                        WHERE d.workspace_id = :ws
                         ORDER BY lower(d.name)
                         """)
+                .param("ws", WorkspaceContext.id())
                 .query((rs, n) -> new Folder(rs.getObject("id", UUID.class), rs.getString("name"), rs.getLong("form_count")))
                 .list();
     }
@@ -45,8 +48,8 @@ public class FolderService {
     public Folder create(String name) {
         String clean = cleanName(name);
         try {
-            UUID id = jdbc.sql("INSERT INTO form_folder (name, workspace_id) VALUES (:name, " + WorkingCopyRepository.DEFAULT_WORKSPACE + ") RETURNING id")
-                    .param("name", clean).query(UUID.class).single();
+            UUID id = jdbc.sql("INSERT INTO form_folder (name, workspace_id) VALUES (:name, :ws) RETURNING id")
+                    .param("name", clean).param("ws", WorkspaceContext.id()).query(UUID.class).single();
             return new Folder(id, clean, 0);
         } catch (DuplicateKeyException e) {
             throw nameTaken();
@@ -57,7 +60,8 @@ public class FolderService {
     public Folder rename(UUID id, String name) {
         String clean = cleanName(name);
         try {
-            int updated = jdbc.sql("UPDATE form_folder SET name = :name WHERE id = :id").param("name", clean).param("id", id).update();
+            int updated = jdbc.sql("UPDATE form_folder SET name = :name WHERE id = :id AND workspace_id = :ws")
+                    .param("name", clean).param("id", id).param("ws", WorkspaceContext.id()).update();
             if (updated == 0) {
                 throw notFound();
             }
@@ -73,7 +77,8 @@ public class FolderService {
      */
     @Transactional
     public String delete(UUID id) {
-        String name = jdbc.sql("SELECT name FROM form_folder WHERE id = :id FOR UPDATE").param("id", id)
+        String name = jdbc.sql("SELECT name FROM form_folder WHERE id = :id AND workspace_id = :ws FOR UPDATE")
+                .param("id", id).param("ws", WorkspaceContext.id())
                 .query(String.class).optional().orElseThrow(FolderService::notFound);
         long active = jdbc.sql("SELECT COUNT(*) FROM form WHERE folder_id = :id AND archived_at IS NULL")
                 .param("id", id).query(Long.class).single();
@@ -91,11 +96,12 @@ public class FolderService {
     public String moveForm(String key, UUID folderId) {
         String name = null;
         if (folderId != null) {
-            name = jdbc.sql("SELECT name FROM form_folder WHERE id = :id").param("id", folderId)
+            name = jdbc.sql("SELECT name FROM form_folder WHERE id = :id AND workspace_id = :ws")
+                    .param("id", folderId).param("ws", WorkspaceContext.id())
                     .query(String.class).optional().orElseThrow(FolderService::notFound);
         }
-        int updated = jdbc.sql("UPDATE form SET folder_id = :folder WHERE key = :key")
-                .param("folder", folderId).param("key", key).update();
+        int updated = jdbc.sql("UPDATE form SET folder_id = :folder WHERE key = :key AND workspace_id = :ws")
+                .param("folder", folderId).param("key", key).param("ws", WorkspaceContext.id()).update();
         if (updated == 0) {
             throw new NotFoundException("Form " + key + " does not exist");
         }

@@ -16,7 +16,7 @@ public class RetentionRepository {
     /** A submission found for erasure, with its form key. */
     public record Match(UUID id, String formKey) {}
 
-    public record FormRetention(UUID formId, String key, int days) {}
+    public record FormRetention(UUID formId, String key, UUID workspaceId, int days) {}
 
     private final JdbcClient jdbc;
 
@@ -42,8 +42,9 @@ public class RetentionRepository {
     }
 
     public List<FormRetention> formsWithRetention() {
-        return jdbc.sql("SELECT id, key, retention_days FROM form WHERE retention_days IS NOT NULL")
-                .query((rs, n) -> new FormRetention(rs.getObject("id", UUID.class), rs.getString("key"), rs.getInt("retention_days")))
+        return jdbc.sql("SELECT id, key, workspace_id, retention_days FROM form WHERE retention_days IS NOT NULL")
+                .query((rs, n) -> new FormRetention(rs.getObject("id", UUID.class), rs.getString("key"),
+                        rs.getObject("workspace_id", UUID.class), rs.getInt("retention_days")))
                 .list();
     }
 
@@ -73,13 +74,14 @@ public class RetentionRepository {
     }
 
     /** Submissions whose subject is {@code subject}. */
-    public List<Match> bySubject(String subject) {
+    public List<Match> bySubject(UUID workspace, String subject) {
         return jdbc.sql("""
                         SELECT s.id, f.key FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id JOIN form f ON f.id = v.form_id
-                        WHERE s.subject = :subject
+                        WHERE s.subject = :subject AND f.workspace_id = :ws
                         """)
                 .param("subject", subject)
+                .param("ws", workspace)
                 .query((rs, n) -> new Match(rs.getObject("id", UUID.class), rs.getString("key")))
                 .list();
     }
@@ -88,14 +90,16 @@ public class RetentionRepository {
      * Submissions that contain {@code email} as a string value anywhere in their data (any field,
      * repeater items included), case-insensitively. Encrypted (sensitive) values are not searched.
      */
-    public List<Match> byEmail(String email) {
+    public List<Match> byEmail(UUID workspace, String email) {
         return jdbc.sql("""
                         SELECT s.id, f.key FROM submission s
                         JOIN form_version v ON v.id = s.form_version_id JOIN form f ON f.id = v.form_id
-                        WHERE EXISTS (SELECT 1 FROM jsonb_path_query(s.data, 'strict $.**') AS value
+                        WHERE f.workspace_id = :ws
+                          AND EXISTS (SELECT 1 FROM jsonb_path_query(s.data, 'strict $.**') AS value
                                       WHERE jsonb_typeof(value) = 'string' AND lower(value #>> '{}') = lower(:email))
                         """)
                 .param("email", email)
+                .param("ws", workspace)
                 .query((rs, n) -> new Match(rs.getObject("id", UUID.class), rs.getString("key")))
                 .list();
     }

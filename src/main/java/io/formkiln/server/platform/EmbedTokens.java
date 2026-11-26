@@ -1,5 +1,6 @@
 package io.formkiln.server.platform;
 
+import io.formkiln.server.workspaces.WorkspaceContext;
 import io.formkiln.server.accounts.Secrets;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -16,7 +17,8 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * Short-lived tokens that let an embedding application's users access a {@code token}-mode form:
  * {@code base64url(payload).base64url(HMAC-SHA256)}, signed with a key derived from
- * FORMKILN_ENCRYPTION_KEY. The payload holds the form key, an optional subject and the expiry.
+ * FORMKILN_ENCRYPTION_KEY. The payload holds the workspace id, the form key, an optional subject and the expiry; a
+ * token is only valid in the workspace of the request that issued it.
  */
 @Component
 public class EmbedTokens {
@@ -46,6 +48,7 @@ public class EmbedTokens {
 
     public String encode(Claims claims) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("w", WorkspaceContext.id().toString());
         payload.put("f", claims.formKey());
         if (claims.subject() != null) {
             payload.put("s", claims.subject());
@@ -84,7 +87,8 @@ public class EmbedTokens {
             return Optional.empty();
         }
         Instant expiresAt = Instant.ofEpochSecond(((Number) payload.get("exp")).longValue());
-        if (!formKey.equals(payload.get("f")) || !expiresAt.isAfter(clock.instant())) {
+        if (!WorkspaceContext.id().toString().equals(payload.get("w")) || !formKey.equals(payload.get("f"))
+                || !expiresAt.isAfter(clock.instant())) {
             return Optional.empty();
         }
         return Optional.of(new Claims(formKey, (String) payload.get("s"), expiresAt));
