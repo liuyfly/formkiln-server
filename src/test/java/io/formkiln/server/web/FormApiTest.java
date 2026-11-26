@@ -105,6 +105,18 @@ class FormApiTest {
     }
 
     @Test
+    void publishesElementWidthsWithinTheLayoutGrid() throws Exception {
+        String narrow = minimalForm("contact", ", {\"type\": \"text\", \"key\": \"city\", \"label\": \"City\", \"width\": 2}");
+        mvc.perform(publish("contact", narrow)).andExpect(status().isCreated());
+
+        String tooWide = minimalForm("contact", ", {\"type\": \"text\", \"key\": \"city\", \"label\": \"City\", \"width\": 4}");
+        mvc.perform(publish("contact", tooWide))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.errors[0].pointer").value("/pages/0/elements/1/width"))
+                .andExpect(jsonPath("$.errors[0].code").value("width"));
+    }
+
+    @Test
     void rejectsADocumentPublishedUnderAnotherKey() throws Exception {
         mvc.perform(publish("other", minimalForm("contact", "")))
                 .andExpect(status().isUnprocessableContent())

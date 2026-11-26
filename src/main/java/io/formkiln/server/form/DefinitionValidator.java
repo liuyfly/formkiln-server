@@ -124,6 +124,7 @@ public final class DefinitionValidator {
     private void run() {
         checkKeys();
         checkOutcomeKeys();
+        checkWidths();
         for (Node node : model.nodes) {
             Scope scope = new Scope(node.repeater, false, 0);
             for (String property : List.of("visible", "required", "readOnly", "calculate")) {
@@ -158,6 +159,21 @@ public final class DefinitionValidator {
             Set<String> keys = node.repeater == null ? top : seen.computeIfAbsent(node.repeater, r -> new HashSet<>());
             if (!keys.add(node.key)) {
                 report(node.pointer + "/key", "duplicateKey");
+            }
+        }
+    }
+
+    /** Form Schema §5.5: an element spans at most the columns of the layout grid (default 3). */
+    private void checkWidths() {
+        double columns = 3;
+        if (model.doc.get("settings") instanceof Map<?, ?> settings
+                && settings.get("layout") instanceof Map<?, ?> layout
+                && layout.get("columns") instanceof Number number) {
+            columns = number.doubleValue();
+        }
+        for (Node node : model.nodes) {
+            if (node.kind != Kind.PAGE && node.source.get("width") instanceof Number width && width.doubleValue() > columns) {
+                report(node.pointer + "/width", "width");
             }
         }
     }
