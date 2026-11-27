@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
-FROM eclipse-temurin:21-jdk AS build
+# The jar does not depend on the platform: build it once, natively, for every target platform.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY gradlew settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle ./gradle
