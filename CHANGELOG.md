@@ -39,6 +39,8 @@ First release.
 - Roles per workspace; outsiders get 404. Instance admins manage workspaces and accounts without
   seeing form data, except through an audited one-hour read-only window opened with a reason.
   Archived workspaces are read-only and stop serving their forms.
+- PostgreSQL row-level security keeps workspaces apart under the server's checks
+  (`FORMKILN_RLS`, on by default; role `formkiln_app`, see the operations guide).
 
 ### Accounts and security
 

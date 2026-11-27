@@ -46,6 +46,9 @@ formkiln:
   cookie-secure: ${FORMKILN_COOKIE_SECURE:true}
   # Invited as the first admin when there are no members yet.
   bootstrap-admin-email: ${FORMKILN_BOOTSTRAP_ADMIN_EMAIL:}
+  # PostgreSQL row-level security under the workspace checks: enforce or off. With enforce the
+  # role formkiln_app is created at start (or must be created by a DBA, see docs/operations.md).
+  rls: ${FORMKILN_RLS:enforce}
   # Requests per minute and client IP to the public authentication endpoints.
   auth-rate-limit: ${FORMKILN_AUTH_RATE_LIMIT:20}
   # Requests per minute and client IP to runtime writes (submissions, drafts, uploads).
