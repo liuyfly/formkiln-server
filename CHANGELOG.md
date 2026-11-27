@@ -7,18 +7,23 @@ automatically on start and only move forward: back up before upgrading (see
 
 The server, admin and hosted images share version numbers: run the same version of all three.
 
-## 0.1.0
+## 0.1.0 (2026-11-27)
 
 First release.
 
 ### Forms
 
 - Publish [Form Schema v1](https://github.com/liuyfly/formkiln/tree/main/packages/spec) documents
-  as immutable versions; definitions are validated with the same rules as `@formkiln/core`
-  (shared conformance suite, `@formkiln/spec` 0.4.0).
+  as immutable versions, including multi-column layouts (`width`) and stable element ids.
+  Definitions are validated with the same rules as `@formkiln/core` (shared conformance suite;
+  the server build takes the specification from a pinned commit of the formkiln repository).
+- Renaming a field keeps its history: CSV export columns, compatibility checks and the
+  confirmation-email field follow the element id.
 - Working copies for the builder: autosave with optimistic concurrency, compatibility check
   against the published version, publish and roll back, create from a template or a copy.
 - Expression evaluator with the same semantics as the TypeScript engine.
+- Folders (one level) and archiving: an archived form is hidden and no longer served, with all
+  its versions and submissions kept until it is restored.
 
 ### Submissions
 
