@@ -33,6 +33,7 @@ cp .env.example .env   # git-ignored; adjust the connection settings
 | `FORMKILN_DB_URL` | `jdbc:postgresql://localhost:5432/formkiln` | JDBC URL |
 | `FORMKILN_DB_USERNAME` | `formkiln` | Database user |
 | `FORMKILN_DB_PASSWORD` | `formkiln` | Database password |
+| `FORMKILN_RLS` | `enforce` | PostgreSQL row-level security under the workspace checks: `enforce` or `off`. Needs the role `formkiln_app` (created at start when the database user may; see [Operations](docs/operations.md#row-level-security)) |
 | `FORMKILN_PORT` | `8080` | HTTP port |
 | `FORMKILN_ENCRYPTION_KEY` | _(required)_ | 32 random bytes, Base64 (`openssl rand -base64 32`). Encrypts secrets at rest (TOTP, sensitive answers, drafts, webhook secrets and payloads) and signs embed tokens. Keep it safe: losing it locks out every member and makes encrypted data unreadable. |
 | `FORMKILN_SERVICE_TOKEN` | _(empty)_ | Bearer token for automation on the management API of the `default` workspace (acts as an editor there). Disabled when empty. Prefer workspace service tokens (created by workspace admins, revocable one by one). |

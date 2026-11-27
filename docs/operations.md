@@ -24,6 +24,27 @@ deployment; the same applies to Kubernetes or any other runtime.
 - Required settings: `FORMKILN_ENCRYPTION_KEY`, the database connection and `FORMKILN_ADMIN_URL`.
   See [Configuration](../README.md#2-configuration) for the rest.
 
+## Row-level security
+
+Workspaces are kept apart twice: by the server's checks on every request, and by PostgreSQL
+row-level security underneath. Requests that act in a workspace run as the database role
+`formkiln_app` with that workspace set on the connection, so the database itself hides other
+workspaces' rows and refuses to write them. Migrations, background jobs, sign-in and instance
+administration keep the configured database user, which owns the tables.
+
+At start the server creates `formkiln_app` (no login), lets the database user switch to it and grants
+it the tables. That needs a database user that may create roles: the owner of a Docker or managed
+database usually may. Otherwise the server stops with this message; ask your database administrator
+to run once, then start again:
+
+```sql
+CREATE ROLE formkiln_app NOLOGIN;
+GRANT formkiln_app TO formkiln;  -- the user in FORMKILN_DB_USERNAME
+```
+
+`FORMKILN_RLS=off` runs without row-level security (the server's checks only) and logs a warning at
+start. Use it only when the role cannot be created.
+
 ## Backup and restore
 
 Three things together make a complete backup. Losing any one of them loses data:
@@ -176,6 +197,7 @@ groups:
 | Symptom | Check |
 | --- | --- |
 | Server does not start: `FORMKILN_ENCRYPTION_KEY is not set` / `must be Base64` | It must be 32 random bytes, Base64 (`openssl rand -base64 32`) |
+| Server does not start: `Row-level security needs the database role formkiln_app` | Run the two SQL statements of the message as a database administrator (see [Row-level security](#row-level-security)) |
 | Server does not start: Flyway validation failed | The database was migrated by a newer version. Run that version, or restore the backup |
 | Every request is rate-limited | The proxy does not append the client address to `X-Forwarded-For`, so all clients share one IP |
 | Admin sign-in loops back to the sign-in page | Serve the admin app over HTTPS, or set `FORMKILN_COOKIE_SECURE=false` for plain-HTTP testing |
